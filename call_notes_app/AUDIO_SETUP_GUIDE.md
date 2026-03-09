@@ -16,44 +16,51 @@ VB-CABLE creates two virtual devices:
 Audio flows like this:
 
 ```
-Call/YouTube audio → CABLE Input (speaker) → CABLE Output (mic) → App captures it
+Call audio → CABLE Input (system default speaker) → CABLE Output → App captures it
+                                                                 ↓
+                                                    Listen-through → Your speakers/headset (you hear it)
 ```
-
-The trick is that you also need to hear the audio yourself, so we use the "Listen" feature to echo it back to your real speakers or headset.
 
 ---
 
-## Scenario 1: Using a Headset (Plantronics, Jabra, etc.)
+## Scenario 1: Using a Headset (Plantronics Blackwire 5220 or similar)
 
-### Windows Sound Settings
+### Windows Sound Settings (right-click speaker icon → Sound settings)
 
-1. Right-click the speaker icon in your taskbar → **Sound settings**
-2. Set **Output device** to: `CABLE Input (VB-Audio Virtual Cable)`
-   - This routes all system audio (Teams, Zoom, YouTube) into the virtual cable
+- Set **Output device** to: `CABLE Input (VB-Audio Virtual Cable)`
 
-### Listen-Through (so you can hear audio in your headset)
+### mmsys.cpl (Win + R → mmsys.cpl → Enter)
 
-1. Press `Win + R`, type `mmsys.cpl`, press Enter
-2. Go to the **Recording** tab
-3. Right-click **CABLE Output (VB-Audio Virtual Cable)** → **Properties**
-4. Go to the **Listen** tab
-5. Check **"Listen to this device"**
-6. Set **"Playback through this device"** to: `Your headset speakers (e.g., Plantronics)`
-7. Click **OK**
+Playback tab:
+- Verify **CABLE Input (VB-Audio Virtual Cable)** is the Default Device
+
+Recording tab:
+1. Right-click **CABLE Output (VB-Audio Virtual Cable)** → Properties
+2. Go to the **Listen** tab
+3. Check **"Listen to this device"**
+4. Set **"Playback through this device"** to: `Headset Earphone (Plantronics Blackwire 5220 Series)`
+5. Click Apply, then OK
+
+### Zoom / Teams Audio Settings
+
+- Speaker: **Same as System** (this routes audio through CABLE Input)
+- Microphone: **Headset Microphone (Plantronics Blackwire 5220 Series)**
 
 ### In the App
 
-- **System Audio (CABLE Output):** Select `CABLE Output (VB-Audio Virtual Cable)`
-- **Microphone:** Select `Headset Microphone (Plantronics)` (or your headset mic name)
+- **System Audio (CABLE Output):** `12: CABLE Output (VB-Audio Virtual Cable)`
+- **Microphone:** `10: Headset Microphone (Plantronics Blackwire 5220)`
 
 ### Summary
 
 | Setting | Value |
 |---|---|
 | Windows output device | CABLE Input (VB-Audio Virtual Cable) |
-| Listen-through playback | Your headset (Plantronics, Jabra, etc.) |
-| App — System Audio | CABLE Output (VB-Audio Virtual Cable) |
-| App — Microphone | Headset Microphone |
+| mmsys.cpl listen-through | Headset Earphone (Plantronics) |
+| Zoom/Teams speaker | Same as System |
+| Zoom/Teams microphone | Headset Microphone (Plantronics) |
+| App — System Audio | 12: CABLE Output (VB-Audio Virtual Cable) |
+| App — Microphone | 10: Headset Microphone (Plantronics) |
 
 ---
 
@@ -61,53 +68,64 @@ The trick is that you also need to hear the audio yourself, so we use the "Liste
 
 ### Windows Sound Settings
 
-1. Right-click the speaker icon in your taskbar → **Sound settings**
-2. Set **Output device** to: `CABLE Input (VB-Audio Virtual Cable)`
+- Set **Output device** to: `CABLE Input (VB-Audio Virtual Cable)` (same as headset setup)
 
-### Listen-Through (so you can hear audio from your laptop speakers)
+### mmsys.cpl (Win + R → mmsys.cpl → Enter)
 
-1. Press `Win + R`, type `mmsys.cpl`, press Enter
-2. Go to the **Recording** tab
-3. Right-click **CABLE Output (VB-Audio Virtual Cable)** → **Properties**
-4. Go to the **Listen** tab
-5. Check **"Listen to this device"**
-6. Set **"Playback through this device"** to: `Speakers (Realtek Audio)` (or your built-in speakers)
-7. Click **OK**
+Recording tab:
+1. Right-click **CABLE Output (VB-Audio Virtual Cable)** → Properties
+2. Go to the **Listen** tab
+3. Check **"Listen to this device"**
+4. Set **"Playback through this device"** to: `Speakers (Realtek(R) Audio)`
+5. Click Apply, then OK
+
+### Zoom / Teams Audio Settings
+
+- Speaker: **Same as System**
+- Microphone: **Microphone (Realtek(R) Audio)**
 
 ### In the App
 
-- **System Audio (CABLE Output):** Select `CABLE Output (VB-Audio Virtual Cable)`
-- **Microphone:** Select `Microphone (Realtek(R) Audio)` (or your built-in mic name)
+- **System Audio (CABLE Output):** `12: CABLE Output (VB-Audio Virtual Cable)`
+- **Microphone:** `11: Microphone (Realtek(R) Audio)`
 
 ### Summary
 
 | Setting | Value |
 |---|---|
 | Windows output device | CABLE Input (VB-Audio Virtual Cable) |
-| Listen-through playback | Speakers (Realtek Audio) |
-| App — System Audio | CABLE Output (VB-Audio Virtual Cable) |
-| App — Microphone | Microphone (Realtek(R) Audio) |
+| mmsys.cpl listen-through | Speakers (Realtek(R) Audio) |
+| Zoom/Teams speaker | Same as System |
+| Zoom/Teams microphone | Microphone (Realtek(R) Audio) |
+| App — System Audio | 12: CABLE Output (VB-Audio Virtual Cable) |
+| App — Microphone | 11: Microphone (Realtek(R) Audio) |
 
 ---
 
 ## Switching Between Headset and Laptop Speakers
 
-When you plug in or unplug a headset, Windows often auto-switches the output device to the headset. This breaks the VB-CABLE routing because audio stops going through CABLE Input.
+When you plug in or unplug your headset, only TWO things need to change:
 
-**Every time you plug in or unplug a headset:**
+### Plugging in headset
 
-1. Go to Windows Sound Settings
-2. Set the output device back to `CABLE Input (VB-Audio Virtual Cable)`
-3. Open `mmsys.cpl` → Recording → CABLE Output → Listen tab
-4. Change **"Playback through this device"** to match your current listening device:
-   - Headset plugged in → select your headset
-   - No headset → select your laptop speakers
+1. `mmsys.cpl` → Recording → CABLE Output → Listen tab → change playback to **Headset Earphone (Plantronics)**
+2. In the app, change Microphone to **10: Headset Microphone (Plantronics)**
 
-**In the app**, just change the Microphone dropdown to match:
-- Headset plugged in → select your headset mic
-- No headset → select your built-in mic
+### Unplugging headset
 
-The System Audio dropdown stays the same (`CABLE Output`) regardless of which device you're using.
+1. `mmsys.cpl` → Recording → CABLE Output → Listen tab → change playback to **Speakers (Realtek(R) Audio)**
+2. In the app, change Microphone to **11: Microphone (Realtek(R) Audio)**
+
+Everything else stays the same:
+- Windows output stays on CABLE Input
+- System Audio in the app stays on CABLE Output (device 12)
+- Zoom/Teams speaker stays on "Same as System"
+
+---
+
+## Important: Zoom / Teams Speaker Setting
+
+The call app (Zoom, Teams, etc.) must have its speaker set to **"Same as System"** — not directly to your headset or speakers. If you set it directly to your headset, the audio bypasses VB-CABLE and the app won't capture it.
 
 ---
 
@@ -115,11 +133,12 @@ The System Audio dropdown stays the same (`CABLE Output`) regardless of which de
 
 | Problem | Fix |
 |---|---|
-| App not capturing system audio | Check that Windows output is set to CABLE Input, not your headset or speakers |
-| Can't hear anything | Set up Listen-through in mmsys.cpl (Recording → CABLE Output → Listen tab) |
-| App not capturing your voice | Make sure the correct mic is selected in the app's Microphone dropdown |
-| Audio stopped after plugging in headset | Windows switched output — set it back to CABLE Input |
-| Multiple CABLE Output entries in app | Select the one labeled `CABLE Output (VB-Audio Virtual Cable)` — avoid "VB-Audio Point" entries |
+| App not capturing call audio | Check that Zoom/Teams speaker is "Same as System", not your headset directly |
+| Can't hear anything | Open mmsys.cpl → Recording → CABLE Output → Listen tab → make sure "Listen to this device" is checked and playback device is correct |
+| Audio stopped after plugging in headset | Windows may have switched output — set it back to CABLE Input in Sound Settings, and update listen-through to your headset |
+| App not capturing your voice | Change the Microphone dropdown in the app to match your current mic (headset or built-in) |
+| Multiple CABLE Output entries in app | Use device `12: CABLE Output (VB-Audio Virtual Cable)` |
+| Zoom audio goes to headset but app doesn't capture | Zoom speaker is set directly to headset — change it to "Same as System" |
 
 ---
 
