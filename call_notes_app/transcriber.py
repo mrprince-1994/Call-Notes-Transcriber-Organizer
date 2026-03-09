@@ -1,0 +1,210 @@
+import asyncio
+import threading
+import struct
+import numpy as np
+import sounddevice as sd
+from amazon_transcribe.client import TranscribeStreamingClient
+from amazon_transcribe.handlers import TranscriptResultStreamHandler
+from amazon_transcribe.model import TranscriptEvent
+from config import SAMPLE_RATE, CHANNELS, AWS_REGION
+
+
+class _TranscriptHandler(TranscriptResultStreamHandler):
+    """Handles streaming transcript events from Amazon Transcribe."""
+
+    def __init__(self, stream, on_partial, on_final):
+        super().__init__(stream)
+        self.on_partial = on_partial  # callback(text) for live partial updates
+        self.on_final = on_final      # callback(text) for finalized text
+        self.full_transcript = []
+
+    async def handle_transcript_event(self, transcript_event: TranscriptEvent):
+        results = transcript_event.transcript.results
+        for result in results:
+            if not result.alternatives:
+                continue
+            text = result.alternatives[0].transcript.strip()
+            if not text:
+                continue
+            if result.is_partial:
+                if self.on_partial:
+                    self.on_partial(text)
+            else:
+                self.full_transcript.append(text)
+                if self.on_final:
+                    self.on_final(text)
+
+
+
+class LiveTranscriber:
+    """Captures system audio + mic and streams to Amazon Transcribe."""
+
+    def __init__(self, system_device=None, mic_device=None, on_partial=None, on_final=None):
+        self.system_device = system_device
+        self.mic_device = mic_device
+        self.on_partial = on_partial
+        self.on_final = on_final
+        self._running = False
+        self._system_stream = None
+        self._mic_stream = None
+        self._thread = None
+        self._handler = None
+
+        # Separate buffers for mixing
+        self._lock = threading.Lock()
+        self._system_buffer = np.empty((0,), dtype=np.float32)
+        self._mic_buffer = np.empty((0,), dtype=np.float32)
+
+    def _system_callback(self, indata, frames, time_info, status):
+        if status:
+            print(f"System audio status: {status}")
+        with self._lock:
+            self._system_buffer = np.concatenate(
+                [self._system_buffer, indata[:, 0].copy()]
+            )
+
+    def _mic_callback(self, indata, frames, time_info, status):
+        if status:
+            print(f"Mic audio status: {status}")
+        with self._lock:
+            self._mic_buffer = np.concatenate(
+                [self._mic_buffer, indata[:, 0].copy()]
+            )
+
+    def _get_mixed_chunk(self, num_samples):
+        """Extract and mix audio from both buffers. Returns PCM16 bytes or None."""
+        has_system = self.system_device is not None
+        has_mic = self.mic_device is not None
+
+        with self._lock:
+            if has_system and has_mic:
+                ready = min(len(self._system_buffer), len(self._mic_buffer))
+            elif has_system:
+                ready = len(self._system_buffer)
+            else:
+                ready = len(self._mic_buffer)
+
+            if ready < num_samples:
+                return None
+
+            if has_system and has_mic:
+                sys_chunk = self._system_buffer[:num_samples]
+                mic_chunk = self._mic_buffer[:num_samples]
+                self._system_buffer = self._system_buffer[num_samples:]
+                self._mic_buffer = self._mic_buffer[num_samples:]
+                mixed = (sys_chunk + mic_chunk) / 2.0
+            elif has_system:
+                mixed = self._system_buffer[:num_samples]
+                self._system_buffer = self._system_buffer[num_samples:]
+            else:
+                mixed = self._mic_buffer[:num_samples]
+                self._mic_buffer = self._mic_buffer[num_samples:]
+
+        # Convert float32 [-1.0, 1.0] to PCM16 bytes
+        peak = np.max(np.abs(mixed))
+        if peak > 1.0:
+            mixed = mixed / peak
+        pcm16 = (mixed * 32767).astype(np.int16)
+        return pcm16.tobytes()
+
+    async def _stream_audio(self, transcribe_stream):
+        """Feed audio chunks to Amazon Transcribe."""
+        # Send ~100ms chunks (1600 samples at 16kHz)
+        chunk_samples = SAMPLE_RATE // 10
+
+        while self._running:
+            audio_bytes = self._get_mixed_chunk(chunk_samples)
+            if audio_bytes:
+                await transcribe_stream.input_stream.send_audio_event(
+                    audio_chunk=audio_bytes
+                )
+            else:
+                await asyncio.sleep(0.05)
+
+        await transcribe_stream.input_stream.end_stream()
+
+    async def _run_transcription(self):
+        """Main async loop: connect to Transcribe and stream audio."""
+        client = TranscribeStreamingClient(region=AWS_REGION)
+
+        stream = await client.start_stream_transcription(
+            language_code="en-US",
+            media_sample_rate_hz=SAMPLE_RATE,
+            media_encoding="pcm",
+        )
+
+        self._handler = _TranscriptHandler(stream.output_stream, self.on_partial, self.on_final)
+
+        await asyncio.gather(
+            self._stream_audio(stream),
+            self._handler.handle_events(),
+        )
+
+    def _thread_target(self):
+        """Run the async transcription loop in a new event loop."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._run_transcription())
+        except Exception as e:
+            print(f"Transcription error: {e}")
+        finally:
+            loop.close()
+
+    def get_audio_devices(self):
+        """Return list of available input audio devices."""
+        devices = sd.query_devices()
+        input_devices = []
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0:
+                input_devices.append((i, d["name"]))
+        return input_devices
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._system_buffer = np.empty((0,), dtype=np.float32)
+        self._mic_buffer = np.empty((0,), dtype=np.float32)
+
+        if self.system_device is not None:
+            self._system_stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="float32",
+                device=self.system_device,
+                callback=self._system_callback,
+            )
+            self._system_stream.start()
+            print(f"System audio stream started (device {self.system_device})")
+
+        if self.mic_device is not None:
+            self._mic_stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="float32",
+                device=self.mic_device,
+                callback=self._mic_callback,
+            )
+            self._mic_stream.start()
+            print(f"Mic stream started (device {self.mic_device})")
+
+        self._thread = threading.Thread(target=self._thread_target, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+        for stream in (self._system_stream, self._mic_stream):
+            if stream:
+                stream.stop()
+                stream.close()
+        self._system_stream = None
+        self._mic_stream = None
+        if self._thread:
+            self._thread.join(timeout=10)
+            self._thread = None
+
+    def get_full_transcript(self):
+        if self._handler:
+            return "\n".join(self._handler.full_transcript)
+        return ""
