@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
+from tkinter import messagebox, filedialog
+import customtkinter as ctk
 import threading
 from transcriber import LiveTranscriber
 from summarizer import generate_notes
@@ -10,284 +11,277 @@ from agent_client import ask_agent, warmup as warmup_agent, shutdown as shutdown
 from md_render import configure_tags, MarkdownStreamer
 
 # --- Color Palette ---
-BG_DARK = "#1e1e2e"
-BG_PANEL = "#282840"
-BG_INPUT = "#313150"
-BG_CARD = "#2a2a45"
-FG_TEXT = "#cdd6f4"
-FG_DIM = "#7f849c"
+BG_DARK = "#0f0f1a"
+BG_PANEL = "#1a1a2e"
+BG_INPUT = "#252540"
+BG_CARD = "#1e1e35"
+FG_TEXT = "#d8ddf4"
+FG_DIM = "#a6adc8"
 FG_BRIGHT = "#ffffff"
 ACCENT = "#89b4fa"
 ACCENT_HOVER = "#74c7ec"
 GREEN = "#a6e3a1"
+GREEN_HOVER = "#b5f0b0"
 RED = "#f38ba8"
+RED_HOVER = "#f5a0b8"
 ORANGE = "#fab387"
 YELLOW = "#f9e2af"
-BORDER = "#45475a"
+YELLOW_HOVER = "#fce8b8"
+BORDER = "#313150"
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
 
-def _apply_theme(root):
-    """Configure a modern dark ttk theme."""
-    style = ttk.Style(root)
-    style.theme_use("clam")
+class StyledText(tk.Text):
+    """Dark-themed tk.Text with a CTk scrollbar, wrapped in a rounded frame."""
 
-    style.configure(".", background=BG_DARK, foreground=FG_TEXT, font=("Segoe UI", 10))
-    style.configure("TFrame", background=BG_DARK)
-    style.configure("TLabel", background=BG_DARK, foreground=FG_TEXT, font=("Segoe UI", 10))
-    style.configure("TLabelframe", background=BG_PANEL, foreground=ACCENT,
-                     font=("Segoe UI Semibold", 11), borderwidth=1, relief="solid")
-    style.configure("TLabelframe.Label", background=BG_PANEL, foreground=ACCENT,
-                     font=("Segoe UI Semibold", 11))
+    def __init__(self, master, **kwargs):
+        self._outer = ctk.CTkFrame(master, fg_color=BG_INPUT, corner_radius=8,
+                                    border_width=1, border_color=BORDER)
+        super().__init__(self._outer, wrap=tk.WORD, bg=BG_INPUT, fg=FG_TEXT,
+                         insertbackground=FG_BRIGHT, borderwidth=0, highlightthickness=0,
+                         padx=10, pady=8, selectbackground=ACCENT,
+                         selectforeground=BG_DARK, state=tk.DISABLED, **kwargs)
+        sb = ctk.CTkScrollbar(self._outer, command=self.yview, fg_color=BG_INPUT,
+                               button_color=BORDER, button_hover_color=ACCENT)
+        self.configure(yscrollcommand=sb.set)
+        super().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 2), pady=4)
 
-    style.configure("TEntry", fieldbackground=BG_INPUT, foreground=FG_BRIGHT,
-                     insertcolor=FG_BRIGHT, borderwidth=1, relief="solid")
-    style.configure("TCombobox", fieldbackground=BG_INPUT, foreground=FG_BRIGHT,
-                     selectbackground=ACCENT, selectforeground=BG_DARK, borderwidth=1)
-    style.map("TCombobox", fieldbackground=[("readonly", BG_INPUT)],
-              foreground=[("readonly", FG_BRIGHT)])
+    def pack(self, **kw):
+        self._outer.pack(**kw)
 
-    # Buttons
-    style.configure("Accent.TButton", background=ACCENT, foreground=BG_DARK,
-                     font=("Segoe UI Semibold", 10), padding=(12, 6), borderwidth=0)
-    style.map("Accent.TButton", background=[("active", ACCENT_HOVER), ("disabled", BORDER)],
-              foreground=[("disabled", FG_DIM)])
-
-    style.configure("Green.TButton", background=GREEN, foreground=BG_DARK,
-                     font=("Segoe UI Semibold", 10), padding=(12, 6), borderwidth=0)
-    style.map("Green.TButton", background=[("active", "#b5f0b0"), ("disabled", BORDER)],
-              foreground=[("disabled", FG_DIM)])
-
-    style.configure("Red.TButton", background=RED, foreground=BG_DARK,
-                     font=("Segoe UI Semibold", 10), padding=(12, 6), borderwidth=0)
-    style.map("Red.TButton", background=[("active", "#f5a0b8"), ("disabled", BORDER)],
-              foreground=[("disabled", FG_DIM)])
-
-    style.configure("Export.TButton", background=BG_INPUT, foreground=FG_TEXT,
-                     font=("Segoe UI", 9), padding=(10, 5), borderwidth=1, relief="solid")
-    style.map("Export.TButton", background=[("active", BG_CARD), ("disabled", BG_DARK)],
-              foreground=[("disabled", FG_DIM)])
-
-    style.configure("Small.TButton", background=BG_INPUT, foreground=ACCENT,
-                     font=("Segoe UI", 10), padding=(6, 4), borderwidth=1)
-    style.map("Small.TButton", background=[("active", BG_CARD)])
-
-    style.configure("Yellow.TButton", background=YELLOW, foreground=BG_DARK,
-                     font=("Segoe UI Semibold", 10), padding=(10, 5), borderwidth=0)
-    style.map("Yellow.TButton", background=[("active", "#fce8b8"), ("disabled", BORDER)],
-              foreground=[("disabled", FG_DIM)])
-
-    style.configure("TPanedwindow", background=BG_DARK)
-
-    # Section headers
-    style.configure("Section.TLabel", background=BG_DARK, foreground=ACCENT,
-                     font=("Segoe UI Semibold", 10))
-    style.configure("Status.TLabel", background=BG_DARK, foreground=ORANGE,
-                     font=("Segoe UI", 9))
-    style.configure("Title.TLabel", background=BG_DARK, foreground=FG_BRIGHT,
-                     font=("Segoe UI Semibold", 14))
-    style.configure("Dim.TLabel", background=BG_DARK, foreground=FG_DIM,
-                     font=("Segoe UI", 9))
-    style.configure("AI.TLabel", background=BG_DARK, foreground=YELLOW,
-                     font=("Segoe UI Semibold", 10))
+    def grid(self, **kw):
+        self._outer.grid(**kw)
 
 
 class CallNotesApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Call Notes — Live Transcriber")
-        self.root.geometry("1400x800")
+        self.root.geometry("1440x860")
         self.root.minsize(1100, 700)
-        self.root.configure(bg=BG_DARK)
-
-        _apply_theme(root)
+        self.root.configure(fg_color=BG_DARK)
 
         self.transcriber = None
         self._current_transcript = ""
         self._current_notes = ""
         self._ai_enabled = True
-        self._pending_questions = set()  # avoid duplicate lookups
+        self._pending_questions = set()
         self._build_ui()
         self._load_devices()
 
-        # Pre-start MCP servers in background so first question is fast
         warmup_agent()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    # ─────────────────────────── UI BUILD ───────────────────────────
+
     def _build_ui(self):
         # Title bar
-        title_bar = ttk.Frame(self.root)
-        title_bar.pack(fill=tk.X, padx=15, pady=(12, 0))
-        ttk.Label(title_bar, text="🎙  Call Notes", style="Title.TLabel").pack(side=tk.LEFT)
+        title_bar = ctk.CTkFrame(self.root, fg_color="transparent")
+        title_bar.pack(fill=tk.X, padx=20, pady=(16, 0))
+        ctk.CTkLabel(title_bar, text="🎙  Call Notes",
+                     font=ctk.CTkFont("Segoe UI", 20, "bold"),
+                     text_color=FG_BRIGHT).pack(side=tk.LEFT)
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(title_bar, textvariable=self.status_var, style="Status.TLabel").pack(
-            side=tk.RIGHT, padx=5
-        )
+        ctk.CTkLabel(title_bar, textvariable=self.status_var,
+                     font=ctk.CTkFont("Segoe UI", 12), text_color=ORANGE
+                     ).pack(side=tk.RIGHT)
 
-        # Main paned window — 3 columns
-        paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        # 3-column layout
+        cols = ctk.CTkFrame(self.root, fg_color="transparent")
+        cols.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
+        cols.columnconfigure(1, weight=3)
+        cols.columnconfigure(2, weight=2)
+        cols.rowconfigure(0, weight=1)
 
-        # --- Left: History Panel ---
-        history_frame = ttk.LabelFrame(paned, text="  Session History  ", padding=8)
-        paned.add(history_frame, weight=1)
+        self._build_history_panel(cols)
+        self._build_center_panel(cols)
+        self._build_ai_panel(cols)
 
-        filter_frame = ttk.Frame(history_frame)
-        filter_frame.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(filter_frame, text="Filter:", style="Dim.TLabel").pack(side=tk.LEFT)
+        self.root.after(500, self._refresh_history)
+
+    # ── Left: History ──
+    def _build_history_panel(self, parent):
+        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+                             border_width=1, border_color=BORDER)
+        card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        ctk.CTkLabel(card, text="📋  History",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=ACCENT).pack(anchor=tk.W, padx=14, pady=(14, 8))
+
+        filt = ctk.CTkFrame(card, fg_color="transparent")
+        filt.pack(fill=tk.X, padx=12, pady=(0, 8))
+        ctk.CTkLabel(filt, text="Filter:", text_color=FG_DIM,
+                     font=ctk.CTkFont("Segoe UI", 11)).pack(side=tk.LEFT)
         self.history_filter_var = tk.StringVar(value="(All)")
-        self.history_filter_combo = ttk.Combobox(
-            filter_frame, textvariable=self.history_filter_var, width=16, state="readonly"
-        )
-        self.history_filter_combo.pack(side=tk.LEFT, padx=(5, 4))
-        self.history_filter_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_history())
-        ttk.Button(filter_frame, text="⟳", width=3, style="Small.TButton",
-                   command=self._refresh_history).pack(side=tk.LEFT)
+        self.history_filter_combo = ctk.CTkComboBox(
+            filt, variable=self.history_filter_var, width=140,
+            fg_color=BG_INPUT, border_color=BORDER, button_color=BORDER,
+            button_hover_color=ACCENT, dropdown_fg_color=BG_INPUT,
+            dropdown_hover_color=ACCENT, text_color=FG_BRIGHT,
+            font=ctk.CTkFont("Segoe UI", 11), state="readonly",
+            command=lambda _: self._refresh_history())
+        self.history_filter_combo.pack(side=tk.LEFT, padx=(6, 4))
+        ctk.CTkButton(filt, text="⟳", width=32, height=28, fg_color=BG_INPUT,
+                      hover_color=BG_CARD, text_color=ACCENT, corner_radius=6,
+                      font=ctk.CTkFont("Segoe UI", 13),
+                      command=self._refresh_history).pack(side=tk.LEFT)
 
+        lf = ctk.CTkFrame(card, fg_color=BG_INPUT, corner_radius=8,
+                           border_width=1, border_color=BORDER)
+        lf.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
         self.history_list = tk.Listbox(
-            history_frame, width=28, exportselection=False,
-            bg=BG_INPUT, fg=FG_TEXT, selectbackground=ACCENT, selectforeground=BG_DARK,
-            font=("Segoe UI", 9), borderwidth=0, highlightthickness=1,
-            highlightbackground=BORDER, highlightcolor=ACCENT, activestyle="none",
-        )
-        self.history_list.pack(fill=tk.BOTH, expand=True)
+            lf, exportselection=False, bg=BG_INPUT, fg=FG_TEXT,
+            selectbackground=ACCENT, selectforeground=BG_DARK,
+            font=("Segoe UI", 10), borderwidth=0, highlightthickness=0,
+            activestyle="none")
+        self.history_list.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.history_list.bind("<<ListboxSelect>>", self._on_history_select)
         self._history_items = []
 
-        # --- Center: Main Content ---
-        center_frame = ttk.Frame(paned)
-        paned.add(center_frame, weight=3)
+    # ── Center: Controls + Transcript + Notes ──
+    def _build_center_panel(self, parent):
+        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+                             border_width=1, border_color=BORDER)
+        card.grid(row=0, column=1, sticky="nsew", padx=8)
 
-        # Controls card
-        controls = ttk.Frame(center_frame)
-        controls.pack(fill=tk.X, pady=(0, 6))
+        # Controls grid
+        ctrl = ctk.CTkFrame(card, fg_color="transparent")
+        ctrl.pack(fill=tk.X, padx=16, pady=(14, 8))
 
-        ttk.Label(controls, text="Customer Name:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.customer_var = tk.StringVar()
-        cust_entry = ttk.Entry(controls, textvariable=self.customer_var, width=32,
-                               font=("Segoe UI", 10))
-        cust_entry.grid(row=0, column=1, padx=8, columnspan=2, sticky=tk.W, pady=2)
+        for i, (label, var_name, placeholder) in enumerate([
+            ("Customer Name:", "customer_var", "Enter customer name..."),
+        ]):
+            ctk.CTkLabel(ctrl, text=label, text_color=FG_DIM,
+                         font=ctk.CTkFont("Segoe UI", 12)).grid(row=i, column=0, sticky=tk.W, pady=3)
+            setattr(self, var_name, tk.StringVar())
+            ctk.CTkEntry(ctrl, textvariable=getattr(self, var_name), width=280,
+                         fg_color=BG_INPUT, border_color=BORDER, text_color=FG_BRIGHT,
+                         font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
+                         placeholder_text=placeholder
+                         ).grid(row=i, column=1, padx=(10, 0), sticky=tk.W, pady=3)
 
-        ttk.Label(controls, text="System Audio:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        # Audio device combos
         self.system_device_var = tk.StringVar()
-        self.system_device_combo = ttk.Combobox(
-            controls, textvariable=self.system_device_var, width=48, state="readonly",
-            font=("Segoe UI", 9)
-        )
-        self.system_device_combo.grid(row=1, column=1, padx=8, columnspan=2, sticky=tk.W, pady=2)
-
-        ttk.Label(controls, text="Microphone:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.mic_device_var = tk.StringVar()
-        self.mic_device_combo = ttk.Combobox(
-            controls, textvariable=self.mic_device_var, width=48, state="readonly",
-            font=("Segoe UI", 9)
-        )
-        self.mic_device_combo.grid(row=2, column=1, padx=8, columnspan=2, sticky=tk.W, pady=2)
+        for i, (label, var) in enumerate([
+            ("System Audio:", self.system_device_var),
+            ("Microphone:", self.mic_device_var),
+        ], start=1):
+            ctk.CTkLabel(ctrl, text=label, text_color=FG_DIM,
+                         font=ctk.CTkFont("Segoe UI", 12)).grid(row=i, column=0, sticky=tk.W, pady=3)
+            combo = ctk.CTkComboBox(
+                ctrl, variable=var, width=400, fg_color=BG_INPUT, border_color=BORDER,
+                button_color=BORDER, button_hover_color=ACCENT,
+                dropdown_fg_color=BG_INPUT, dropdown_hover_color=ACCENT,
+                text_color=FG_BRIGHT, font=ctk.CTkFont("Segoe UI", 10), state="readonly")
+            combo.grid(row=i, column=1, padx=(10, 0), sticky=tk.W, pady=3)
+            if i == 1:
+                self.system_device_combo = combo
+            else:
+                self.mic_device_combo = combo
 
-        # Buttons row
-        btn_frame = ttk.Frame(center_frame)
-        btn_frame.pack(fill=tk.X, pady=(4, 8))
+        # Buttons
+        bf = ctk.CTkFrame(card, fg_color="transparent")
+        bf.pack(fill=tk.X, padx=16, pady=(4, 10))
 
-        self.start_btn = ttk.Button(btn_frame, text="▶  Start Recording",
-                                     style="Green.TButton", command=self._start)
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.start_btn = ctk.CTkButton(
+            bf, text="▶  Start Recording", fg_color=GREEN, hover_color=GREEN_HOVER,
+            text_color=BG_DARK, font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            corner_radius=8, height=36, command=self._start)
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.stop_btn = ttk.Button(btn_frame, text="⏹  Stop & Generate",
-                                    style="Red.TButton", command=self._stop, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 12))
+        self.stop_btn = ctk.CTkButton(
+            bf, text="⏹  Stop & Generate", fg_color=RED, hover_color=RED_HOVER,
+            text_color=BG_DARK, font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            corner_radius=8, height=36, state=tk.DISABLED, command=self._stop)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 16))
 
-        sep = ttk.Frame(btn_frame, width=1)
-        sep.pack(side=tk.LEFT, padx=(0, 12))
+        self.export_docx_btn = ctk.CTkButton(
+            bf, text="📄 Export DOCX", fg_color=BG_INPUT, hover_color=BG_CARD,
+            text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11), corner_radius=8,
+            height=34, border_width=1, border_color=BORDER, state=tk.DISABLED,
+            command=self._export_docx)
+        self.export_docx_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self.export_docx_btn = ttk.Button(btn_frame, text="📄 Export DOCX",
-                                           style="Export.TButton", command=self._export_docx,
-                                           state=tk.DISABLED)
-        self.export_docx_btn.pack(side=tk.LEFT, padx=(0, 4))
-
-        self.export_pdf_btn = ttk.Button(btn_frame, text="📑 Export PDF",
-                                          style="Export.TButton", command=self._export_pdf,
-                                          state=tk.DISABLED)
+        self.export_pdf_btn = ctk.CTkButton(
+            bf, text="📑 Export PDF", fg_color=BG_INPUT, hover_color=BG_CARD,
+            text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11), corner_radius=8,
+            height=34, border_width=1, border_color=BORDER, state=tk.DISABLED,
+            command=self._export_pdf)
         self.export_pdf_btn.pack(side=tk.LEFT)
 
-        # Transcript area
-        ttk.Label(center_frame, text="Live Transcript", style="Section.TLabel").pack(
-            anchor=tk.W, pady=(4, 3)
-        )
-        self.transcript_text = scrolledtext.ScrolledText(
-            center_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
-            bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
-            font=("Consolas", 10), borderwidth=0, highlightthickness=1,
-            highlightbackground=BORDER, highlightcolor=ACCENT, padx=8, pady=6,
-        )
-        self.transcript_text.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+        # Transcript
+        ctk.CTkLabel(card, text="Live Transcript",
+                     font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                     text_color=ACCENT).pack(anchor=tk.W, padx=16, pady=(4, 4))
+        self.transcript_text = StyledText(card, height=8, font=("Consolas", 10))
+        self.transcript_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
 
-        # Notes area
-        ttk.Label(center_frame, text="Generated Notes", style="Section.TLabel").pack(
-            anchor=tk.W, pady=(2, 3)
-        )
-        self.notes_text = scrolledtext.ScrolledText(
-            center_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
-            bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
-            font=("Segoe UI", 10), borderwidth=0, highlightthickness=1,
-            highlightbackground=BORDER, highlightcolor=ACCENT, padx=8, pady=6,
-        )
-        self.notes_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+        # Notes
+        ctk.CTkLabel(card, text="Generated Notes",
+                     font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                     text_color=ACCENT).pack(anchor=tk.W, padx=16, pady=(2, 4))
+        self.notes_text = StyledText(card, height=8)
+        self.notes_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
-        # --- Right: AI Answers Panel ---
-        ai_frame = ttk.LabelFrame(paned, text="  🤖 AI Answers  ", padding=8)
-        paned.add(ai_frame, weight=2)
 
-        ai_controls = ttk.Frame(ai_frame)
-        ai_controls.pack(fill=tk.X, pady=(0, 6))
+    # ── Right: AI Answers ──
+    def _build_ai_panel(self, parent):
+        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+                             border_width=1, border_color=BORDER)
+        card.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
+
+        ctk.CTkLabel(card, text="🤖  AI Answers",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=YELLOW).pack(anchor=tk.W, padx=14, pady=(14, 8))
+
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.pack(fill=tk.X, padx=12, pady=(0, 6))
 
         self.ai_toggle_var = tk.BooleanVar(value=True)
-        self.ai_toggle_btn = ttk.Checkbutton(
-            ai_controls, text="Auto-detect questions",
-            variable=self.ai_toggle_var, command=self._toggle_ai,
-        )
-        self.ai_toggle_btn.pack(side=tk.LEFT)
-
-        ttk.Button(ai_controls, text="Clear", style="Small.TButton",
-                   command=self._clear_ai_answers).pack(side=tk.RIGHT)
+        ctk.CTkCheckBox(top, text="Auto-detect questions",
+                        variable=self.ai_toggle_var, command=self._toggle_ai,
+                        fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                        text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11)
+                        ).pack(side=tk.LEFT)
+        ctk.CTkButton(top, text="Clear", width=60, height=28, fg_color=BG_INPUT,
+                      hover_color=BG_CARD, text_color=ACCENT, corner_radius=6,
+                      font=ctk.CTkFont("Segoe UI", 11),
+                      command=self._clear_ai_answers).pack(side=tk.RIGHT)
 
         # Manual question entry
-        ask_frame = ttk.Frame(ai_frame)
-        ask_frame.pack(fill=tk.X, pady=(0, 6))
-
+        ask = ctk.CTkFrame(card, fg_color="transparent")
+        ask.pack(fill=tk.X, padx=12, pady=(0, 6))
         self.manual_question_var = tk.StringVar()
-        self.manual_question_entry = ttk.Entry(
-            ask_frame, textvariable=self.manual_question_var,
-            font=("Segoe UI", 9),
-        )
-        self.manual_question_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        self.manual_question_entry.bind("<Return>", lambda e: self._ask_manual_question())
+        entry = ctk.CTkEntry(ask, textvariable=self.manual_question_var,
+                             fg_color=BG_INPUT, border_color=BORDER, text_color=FG_BRIGHT,
+                             font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
+                             placeholder_text="Ask a question...")
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        entry.bind("<Return>", lambda e: self._ask_manual_question())
+        ctk.CTkButton(ask, text="Ask", width=60, height=32, fg_color=YELLOW,
+                      hover_color=YELLOW_HOVER, text_color=BG_DARK,
+                      font=ctk.CTkFont("Segoe UI", 12, "bold"), corner_radius=6,
+                      command=self._ask_manual_question).pack(side=tk.RIGHT)
 
-        ttk.Button(ask_frame, text="Ask", style="Yellow.TButton",
-                   command=self._ask_manual_question).pack(side=tk.RIGHT)
-
-        # AI answers display
-        self.ai_text = scrolledtext.ScrolledText(
-            ai_frame, wrap=tk.WORD, state=tk.DISABLED,
-            bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
-            font=("Segoe UI", 9), borderwidth=0, highlightthickness=1,
-            highlightbackground=BORDER, highlightcolor=YELLOW, padx=8, pady=6,
-        )
-        self.ai_text.pack(fill=tk.BOTH, expand=True)
-
-        # Configure rich text tags for AI panel (markdown rendering)
+        # AI text display
+        self.ai_text = StyledText(card, height=10, font=("Segoe UI", 10))
+        self.ai_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
         configure_tags(self.ai_text)
 
-        # Load history on startup
-        self.root.after(500, self._refresh_history)
+    # ─────────────────────────── CALLBACKS ───────────────────────────
 
     def _on_close(self):
-        """Clean shutdown — stop MCP servers and close window."""
         try:
             shutdown_agent()
         except Exception:
             pass
         self.root.destroy()
 
-    # --- AI Answers ---
     def _toggle_ai(self):
         self._ai_enabled = self.ai_toggle_var.get()
 
@@ -298,21 +292,18 @@ class CallNotesApp:
         self._pending_questions.clear()
 
     def _ask_manual_question(self):
-        question = self.manual_question_var.get().strip()
-        if not question:
+        q = self.manual_question_var.get().strip()
+        if not q:
             return
         self.manual_question_var.set("")
-        self._submit_question(question)
+        self._submit_question(q)
 
     def _submit_question(self, question):
-        """Send a question to the AI agent and stream the answer."""
-        # Deduplicate — don't ask the same question twice
         q_key = question.lower().strip()
         if q_key in self._pending_questions:
             return
         self._pending_questions.add(q_key)
 
-        # Show the question in the panel
         self.ai_text.config(state=tk.NORMAL)
         if self.ai_text.get("1.0", "end-1c").strip():
             self.ai_text.insert(tk.END, "\n" + "─" * 50 + "\n", "separator")
@@ -333,46 +324,35 @@ class CallNotesApp:
         ask_agent(question, callback=on_result, on_chunk=on_chunk)
 
     def _append_ai_chunk(self, text):
-        """Append a streaming chunk to the AI answers panel with markdown rendering."""
         self.ai_text.config(state=tk.NORMAL)
-
-        # Remove the "Searching..." status on first chunk
         if not self._ai_streaming_started:
             self._ai_streaming_started = True
             pos = self.ai_text.search("⏳ Searching AWS docs...", "1.0", tk.END)
             if pos:
                 line_end = self.ai_text.index(f"{pos} lineend+1c")
                 self.ai_text.delete(pos, line_end)
-
         self._ai_md_streamer.feed(text)
         self.ai_text.see(tk.END)
         self.ai_text.config(state=tk.DISABLED)
 
     def _finish_ai_answer(self, error):
-        """Called when the AI answer is complete (or errored)."""
         self.ai_text.config(state=tk.NORMAL)
-
         if error:
-            # Remove the "Searching..." status if still there
             pos = self.ai_text.search("⏳ Searching AWS docs...", "1.0", tk.END)
             if pos:
                 line_end = self.ai_text.index(f"{pos} lineend+1c")
                 self.ai_text.delete(pos, line_end)
             self.ai_text.insert(tk.END, f"⚠️ {error}\n", "status")
         else:
-            # Flush any remaining buffered markdown
             if hasattr(self, "_ai_md_streamer"):
                 self._ai_md_streamer.flush()
-            # Add a trailing newline if needed
             content = self.ai_text.get("end-2c", "end-1c")
             if content != "\n":
                 self.ai_text.insert(tk.END, "\n")
-
         self.ai_text.see(tk.END)
         self.ai_text.config(state=tk.DISABLED)
 
     def _check_transcript_for_questions(self, text):
-        """Called on each final transcript line to check for AWS AI/ML questions."""
         if not self._ai_enabled:
             return
         if is_aws_aiml_question(text):
@@ -380,7 +360,9 @@ class CallNotesApp:
             if question:
                 self._submit_question(question)
 
-    # --- History ---
+
+    # ─────────────────────────── HISTORY ───────────────────────────
+
     def _refresh_history(self):
         threading.Thread(target=self._load_history_bg, daemon=True).start()
 
@@ -392,16 +374,15 @@ class CallNotesApp:
             items = list_sessions(customer)
             self.root.after(0, self._update_history_ui, customers, items)
         except Exception as e:
-            self.root.after(0, lambda: self.status_var.set(f"History load error: {e}"))
+            self.root.after(0, lambda: self.status_var.set(f"History error: {e}"))
 
     def _update_history_ui(self, customers, items):
-        self.history_filter_combo["values"] = customers
+        self.history_filter_combo.configure(values=customers)
         self._history_items = items
         self.history_list.delete(0, tk.END)
         for item in items:
             ts = item["timestamp"][:16].replace("T", " ")
-            label = f"{item['customer_name']}  ·  {ts}"
-            self.history_list.insert(tk.END, label)
+            self.history_list.insert(tk.END, f"{item['customer_name']}  ·  {ts}")
 
     def _on_history_select(self, event):
         sel = self.history_list.curselection()
@@ -411,32 +392,28 @@ class CallNotesApp:
         self._current_transcript = item.get("transcript", "")
         self._current_notes = item.get("notes", "")
 
-        self.transcript_text.config(state=tk.NORMAL)
-        self.transcript_text.delete("1.0", tk.END)
-        self.transcript_text.insert(tk.END, self._current_transcript)
-        self.transcript_text.config(state=tk.DISABLED)
-
-        self.notes_text.config(state=tk.NORMAL)
-        self.notes_text.delete("1.0", tk.END)
-        self.notes_text.insert(tk.END, self._current_notes)
-        self.notes_text.config(state=tk.DISABLED)
+        for widget, content in [(self.transcript_text, self._current_transcript),
+                                 (self.notes_text, self._current_notes)]:
+            widget.config(state=tk.NORMAL)
+            widget.delete("1.0", tk.END)
+            widget.insert(tk.END, content)
+            widget.config(state=tk.DISABLED)
 
         self.customer_var.set(item["customer_name"])
-        self.export_docx_btn.config(state=tk.NORMAL)
-        self.export_pdf_btn.config(state=tk.NORMAL)
+        self.export_docx_btn.configure(state=tk.NORMAL)
+        self.export_pdf_btn.configure(state=tk.NORMAL)
         self.status_var.set(f"Loaded session from {item['timestamp'][:16]}")
 
-    # --- Export ---
+    # ─────────────────────────── EXPORT ───────────────────────────
+
     def _export_docx(self):
         if not self._current_notes:
             messagebox.showinfo("Nothing to export", "No notes to export.")
             return
         customer = self.customer_var.get().strip() or "Notes"
         path = filedialog.asksaveasfilename(
-            defaultextension=".docx",
-            filetypes=[("Word Document", "*.docx")],
-            initialfile=f"{customer}_notes.docx",
-        )
+            defaultextension=".docx", filetypes=[("Word Document", "*.docx")],
+            initialfile=f"{customer}_notes.docx")
         if path:
             _md_to_docx(customer, self._current_notes, path)
             self.status_var.set(f"Exported: {path}")
@@ -447,10 +424,8 @@ class CallNotesApp:
             return
         customer = self.customer_var.get().strip() or "Notes"
         path = filedialog.asksaveasfilename(
-            defaultextension=".pdf",
-            filetypes=[("PDF Document", "*.pdf")],
-            initialfile=f"{customer}_notes.pdf",
-        )
+            defaultextension=".pdf", filetypes=[("PDF Document", "*.pdf")],
+            initialfile=f"{customer}_notes.pdf")
         if not path:
             return
         try:
@@ -476,9 +451,11 @@ class CallNotesApp:
             pdf.output(path)
             self.status_var.set(f"Exported: {path}")
         except ImportError:
-            messagebox.showerror("Missing Library", "Install fpdf2: python -m pip install fpdf2")
+            messagebox.showerror("Missing Library",
+                                 "Install fpdf2: python -m pip install fpdf2")
 
-    # --- Device loading ---
+    # ─────────────────────────── DEVICES ───────────────────────────
+
     def _load_devices(self):
         temp = LiveTranscriber()
         devices = temp.get_audio_devices()
@@ -488,8 +465,8 @@ class CallNotesApp:
         system_names = ["(None)"] + names
         mic_names = ["(None)"] + names
 
-        self.system_device_combo["values"] = system_names
-        self.mic_device_combo["values"] = mic_names
+        self.system_device_combo.configure(values=system_names)
+        self.mic_device_combo.configure(values=mic_names)
 
         cable_idx = None
         mic_idx = None
@@ -499,22 +476,26 @@ class CallNotesApp:
             if "microphone" in name.lower() and mic_idx is None:
                 mic_idx = j
 
-        self.system_device_combo.current(cable_idx + 1 if cable_idx is not None else 0)
-        self.mic_device_combo.current(mic_idx + 1 if mic_idx is not None else 0)
+        self.system_device_combo.set(system_names[cable_idx + 1] if cable_idx is not None else system_names[0])
+        self.mic_device_combo.set(mic_names[mic_idx + 1] if mic_idx is not None else mic_names[0])
 
     def _get_selected_device(self, combo):
-        idx = combo.current()
-        if idx <= 0:
+        val = combo.get()
+        if val == "(None)" or not val:
             return None
-        return self._devices[idx - 1][0]
+        try:
+            idx = int(val.split(":")[0])
+            return idx
+        except (ValueError, IndexError):
+            return None
 
-    # --- Transcript callbacks ---
+    # ─────────────────────────── TRANSCRIPT ───────────────────────────
+
     def _on_partial(self, text):
         self.root.after(0, self._safe_show_partial, text)
 
     def _on_final(self, text):
         self.root.after(0, self._safe_show_final, text)
-        # Check for AWS AI/ML questions in final transcript lines
         self._check_transcript_for_questions(text)
 
     def _safe_show_partial(self, text):
@@ -532,7 +513,8 @@ class CallNotesApp:
         self.transcript_text.see(tk.END)
         self.transcript_text.config(state=tk.DISABLED)
 
-    # --- Recording ---
+    # ─────────────────────────── RECORDING ───────────────────────────
+
     def _start(self):
         customer = self.customer_var.get().strip()
         if not customer:
@@ -546,23 +528,20 @@ class CallNotesApp:
             messagebox.showwarning("No Device", "Please select at least one audio device.")
             return
 
-        for widget in (self.transcript_text, self.notes_text):
-            widget.config(state=tk.NORMAL)
-            widget.delete("1.0", tk.END)
-            widget.config(state=tk.DISABLED)
+        for w in (self.transcript_text, self.notes_text):
+            w.config(state=tk.NORMAL)
+            w.delete("1.0", tk.END)
+            w.config(state=tk.DISABLED)
 
         self._current_transcript = ""
         self._current_notes = ""
         self._pending_questions.clear()
-        self.export_docx_btn.config(state=tk.DISABLED)
-        self.export_pdf_btn.config(state=tk.DISABLED)
+        self.export_docx_btn.configure(state=tk.DISABLED)
+        self.export_pdf_btn.configure(state=tk.DISABLED)
 
         self.transcriber = LiveTranscriber(
-            system_device=system_dev,
-            mic_device=mic_dev,
-            on_partial=self._on_partial,
-            on_final=self._on_final,
-        )
+            system_device=system_dev, mic_device=mic_dev,
+            on_partial=self._on_partial, on_final=self._on_final)
         self.transcriber.start()
 
         self.transcript_text.config(state=tk.NORMAL)
@@ -570,21 +549,20 @@ class CallNotesApp:
         self.transcript_text.mark_gravity("partial_start", tk.LEFT)
         self.transcript_text.config(state=tk.DISABLED)
 
-        self.start_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
+        self.start_btn.configure(state=tk.DISABLED)
+        self.stop_btn.configure(state=tk.NORMAL)
         self.status_var.set("🔴 Recording...")
 
     def _stop(self):
         if not self.transcriber:
             return
-
         self.status_var.set("Stopping recording...")
         self.transcriber.stop()
         transcript = self.transcriber.get_full_transcript()
         self._current_transcript = transcript
 
-        self.start_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.DISABLED)
+        self.start_btn.configure(state=tk.NORMAL)
+        self.stop_btn.configure(state=tk.DISABLED)
 
         if not transcript:
             self.status_var.set("No speech detected.")
@@ -592,9 +570,8 @@ class CallNotesApp:
             return
 
         self.status_var.set("Generating notes with Claude...")
-        threading.Thread(
-            target=self._generate_and_save, args=(transcript,), daemon=True
-        ).start()
+        threading.Thread(target=self._generate_and_save, args=(transcript,),
+                         daemon=True).start()
 
     def _generate_and_save(self, transcript):
         customer = self.customer_var.get().strip()
@@ -607,20 +584,17 @@ class CallNotesApp:
             notes = generate_notes(transcript, customer, on_chunk=on_chunk)
             self._current_notes = notes
             filepath = save_notes(customer, notes)
-
             try:
                 save_session(customer, transcript, notes, filepath)
             except Exception:
                 pass
-
             self.root.after(0, lambda: self.status_var.set(f"Notes saved: {filepath}"))
-            self.root.after(0, lambda: self.export_docx_btn.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.export_pdf_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.export_docx_btn.configure(state=tk.NORMAL))
+            self.root.after(0, lambda: self.export_pdf_btn.configure(state=tk.NORMAL))
             self.root.after(0, self._refresh_history)
         except Exception as e:
-            self.root.after(
-                0, lambda: messagebox.showerror("Error", f"Failed to generate notes:\n{e}")
-            )
+            self.root.after(0, lambda: messagebox.showerror(
+                "Error", f"Failed to generate notes:\n{e}"))
             self.root.after(0, lambda: self.status_var.set("Error generating notes."))
 
     def _prepare_notes_for_streaming(self):
@@ -634,7 +608,7 @@ class CallNotesApp:
 
 
 def main():
-    root = tk.Tk()
+    root = ctk.CTk()
     CallNotesApp(root)
     root.mainloop()
 
