@@ -1,5 +1,6 @@
 import json
 import boto3
+from botocore.config import Config
 from config import AWS_REGION, CLAUDE_MODEL_ID
 
 SYSTEM_PROMPT = """You are an expert meeting note-taker. Given a raw transcript of a call,
@@ -44,13 +45,26 @@ Be exhaustive. It is better to include too much detail than too little. Preserve
 names, numbers, and technical details exactly as stated."""
 
 
-def generate_notes(transcript: str, customer_name: str) -> str:
-    """Send transcript to Claude on Bedrock and return comprehensive organized notes."""
-    client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+def generate_notes(transcript: str, customer_name: str, on_chunk=None) -> str:
+    """Send transcript to Claude on Bedrock and stream back comprehensive notes.
+
+    Args:
+        transcript: The raw call transcript.
+        customer_name: Name of the customer/meeting.
+        on_chunk: Optional callback(str) called with each text chunk as it arrives.
+
+    Returns:
+        The full generated notes text.
+    """
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=AWS_REGION,
+        config=Config(read_timeout=300),
+    )
 
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 8192,
+        "max_tokens": 65536,
         "system": SYSTEM_PROMPT,
         "messages": [
             {
@@ -63,12 +77,21 @@ def generate_notes(transcript: str, customer_name: str) -> str:
         ],
     })
 
-    response = client.invoke_model(
+    response = client.invoke_model_with_response_stream(
         modelId=CLAUDE_MODEL_ID,
         contentType="application/json",
         accept="application/json",
         body=body,
     )
 
-    result = json.loads(response["body"].read())
-    return result["content"][0]["text"]
+    full_text = []
+    for event in response["body"]:
+        chunk = json.loads(event["chunk"]["bytes"])
+        if chunk.get("type") == "content_block_delta":
+            text = chunk["delta"].get("text", "")
+            if text:
+                full_text.append(text)
+                if on_chunk:
+                    on_chunk(text)
+
+    return "".join(full_text)

@@ -108,13 +108,19 @@ When you plug in or unplug your headset, only TWO things need to change:
 
 ### Plugging in headset
 
-1. `mmsys.cpl` → Recording → CABLE Output → Listen tab → change playback to **Headset Earphone (Plantronics)**
-2. In the app, change Microphone to **10: Headset Microphone (Plantronics)**
+1. `mmsys.cpl` → Recording tab → right-click **CABLE Output** → Properties → **Listen** tab
+2. Make sure **"Listen to this device"** is checked
+3. Set **"Playback through this device"** dropdown to: `Headset Earphone (Plantronics Blackwire 5220 Series)`
+4. Click Apply, then OK
+5. In the app, change Microphone to **10: Headset Microphone (Plantronics)**
 
 ### Unplugging headset
 
-1. `mmsys.cpl` → Recording → CABLE Output → Listen tab → change playback to **Speakers (Realtek(R) Audio)**
-2. In the app, change Microphone to **11: Microphone (Realtek(R) Audio)**
+1. `mmsys.cpl` → Recording tab → right-click **CABLE Output** → Properties → **Listen** tab
+2. Make sure **"Listen to this device"** is checked
+3. Set **"Playback through this device"** dropdown to: `Speakers (Realtek(R) Audio)`
+4. Click Apply, then OK
+5. In the app, change Microphone to **11: Microphone (Realtek(R) Audio)**
 
 Everything else stays the same:
 - Windows output stays on CABLE Input

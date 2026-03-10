@@ -1,100 +1,335 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 import threading
 from transcriber import LiveTranscriber
 from summarizer import generate_notes
-from storage import save_notes
+from storage import save_notes, _md_to_docx
+from history import save_session, list_sessions, get_all_customers
+
+# --- Color Palette ---
+BG_DARK = "#1e1e2e"
+BG_PANEL = "#282840"
+BG_INPUT = "#313150"
+BG_CARD = "#2a2a45"
+FG_TEXT = "#cdd6f4"
+FG_DIM = "#7f849c"
+FG_BRIGHT = "#ffffff"
+ACCENT = "#89b4fa"
+ACCENT_HOVER = "#74c7ec"
+GREEN = "#a6e3a1"
+RED = "#f38ba8"
+ORANGE = "#fab387"
+BORDER = "#45475a"
+
+
+def _apply_theme(root):
+    """Configure a modern dark ttk theme."""
+    style = ttk.Style(root)
+    style.theme_use("clam")
+
+    style.configure(".", background=BG_DARK, foreground=FG_TEXT, font=("Segoe UI", 10))
+    style.configure("TFrame", background=BG_DARK)
+    style.configure("TLabel", background=BG_DARK, foreground=FG_TEXT, font=("Segoe UI", 10))
+    style.configure("TLabelframe", background=BG_PANEL, foreground=ACCENT,
+                     font=("Segoe UI Semibold", 11), borderwidth=1, relief="solid")
+    style.configure("TLabelframe.Label", background=BG_PANEL, foreground=ACCENT,
+                     font=("Segoe UI Semibold", 11))
+
+    style.configure("TEntry", fieldbackground=BG_INPUT, foreground=FG_BRIGHT,
+                     insertcolor=FG_BRIGHT, borderwidth=1, relief="solid")
+    style.configure("TCombobox", fieldbackground=BG_INPUT, foreground=FG_BRIGHT,
+                     selectbackground=ACCENT, selectforeground=BG_DARK, borderwidth=1)
+    style.map("TCombobox", fieldbackground=[("readonly", BG_INPUT)],
+              foreground=[("readonly", FG_BRIGHT)])
+
+    # Buttons
+    style.configure("Accent.TButton", background=ACCENT, foreground=BG_DARK,
+                     font=("Segoe UI Semibold", 10), padding=(12, 6), borderwidth=0)
+    style.map("Accent.TButton", background=[("active", ACCENT_HOVER), ("disabled", BORDER)],
+              foreground=[("disabled", FG_DIM)])
+
+    style.configure("Green.TButton", background=GREEN, foreground=BG_DARK,
+                     font=("Segoe UI Semibold", 10), padding=(12, 6), borderwidth=0)
+    style.map("Green.TButton", background=[("active", "#b5f0b0"), ("disabled", BORDER)],
+              foreground=[("disabled", FG_DIM)])
+
+    style.configure("Red.TButton", background=RED, foreground=BG_DARK,
+                     font=("Segoe UI Semibold", 10), padding=(12, 6), borderwidth=0)
+    style.map("Red.TButton", background=[("active", "#f5a0b8"), ("disabled", BORDER)],
+              foreground=[("disabled", FG_DIM)])
+
+    style.configure("Export.TButton", background=BG_INPUT, foreground=FG_TEXT,
+                     font=("Segoe UI", 9), padding=(10, 5), borderwidth=1, relief="solid")
+    style.map("Export.TButton", background=[("active", BG_CARD), ("disabled", BG_DARK)],
+              foreground=[("disabled", FG_DIM)])
+
+    style.configure("Small.TButton", background=BG_INPUT, foreground=ACCENT,
+                     font=("Segoe UI", 10), padding=(6, 4), borderwidth=1)
+    style.map("Small.TButton", background=[("active", BG_CARD)])
+
+    style.configure("TPanedwindow", background=BG_DARK)
+
+    # Section headers
+    style.configure("Section.TLabel", background=BG_DARK, foreground=ACCENT,
+                     font=("Segoe UI Semibold", 10))
+    style.configure("Status.TLabel", background=BG_DARK, foreground=ORANGE,
+                     font=("Segoe UI", 9))
+    style.configure("Title.TLabel", background=BG_DARK, foreground=FG_BRIGHT,
+                     font=("Segoe UI Semibold", 14))
+    style.configure("Dim.TLabel", background=BG_DARK, foreground=FG_DIM,
+                     font=("Segoe UI", 9))
 
 
 class CallNotesApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Call Notes — Live Transcriber")
-        self.root.geometry("850x700")
-        self.root.minsize(700, 550)
+        self.root.geometry("1100x780")
+        self.root.minsize(950, 650)
+        self.root.configure(bg=BG_DARK)
+
+        _apply_theme(root)
 
         self.transcriber = None
+        self._current_transcript = ""
+        self._current_notes = ""
         self._build_ui()
         self._load_devices()
 
     def _build_ui(self):
-        # Top controls frame
-        controls = ttk.Frame(self.root, padding=10)
-        controls.pack(fill=tk.X)
+        # Title bar
+        title_bar = ttk.Frame(self.root)
+        title_bar.pack(fill=tk.X, padx=15, pady=(12, 0))
+        ttk.Label(title_bar, text="🎙  Call Notes", style="Title.TLabel").pack(side=tk.LEFT)
+        self.status_var = tk.StringVar(value="Ready")
+        ttk.Label(title_bar, textvariable=self.status_var, style="Status.TLabel").pack(
+            side=tk.RIGHT, padx=5
+        )
 
-        ttk.Label(controls, text="Customer Name:").grid(row=0, column=0, sticky=tk.W)
+        # Main paned window
+        paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        # --- Left: History Panel ---
+        history_frame = ttk.LabelFrame(paned, text="  Session History  ", padding=8)
+        paned.add(history_frame, weight=1)
+
+        filter_frame = ttk.Frame(history_frame)
+        filter_frame.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(filter_frame, text="Filter:", style="Dim.TLabel").pack(side=tk.LEFT)
+        self.history_filter_var = tk.StringVar(value="(All)")
+        self.history_filter_combo = ttk.Combobox(
+            filter_frame, textvariable=self.history_filter_var, width=16, state="readonly"
+        )
+        self.history_filter_combo.pack(side=tk.LEFT, padx=(5, 4))
+        self.history_filter_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_history())
+        ttk.Button(filter_frame, text="⟳", width=3, style="Small.TButton",
+                   command=self._refresh_history).pack(side=tk.LEFT)
+
+        self.history_list = tk.Listbox(
+            history_frame, width=28, exportselection=False,
+            bg=BG_INPUT, fg=FG_TEXT, selectbackground=ACCENT, selectforeground=BG_DARK,
+            font=("Segoe UI", 9), borderwidth=0, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=ACCENT, activestyle="none",
+        )
+        self.history_list.pack(fill=tk.BOTH, expand=True)
+        self.history_list.bind("<<ListboxSelect>>", self._on_history_select)
+        self._history_items = []
+
+        # --- Right: Main Content ---
+        right_frame = ttk.Frame(paned)
+        paned.add(right_frame, weight=3)
+
+        # Controls card
+        controls = ttk.Frame(right_frame)
+        controls.pack(fill=tk.X, pady=(0, 6))
+
+        ttk.Label(controls, text="Customer Name:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.customer_var = tk.StringVar()
-        ttk.Entry(controls, textvariable=self.customer_var, width=30).grid(
-            row=0, column=1, padx=5, columnspan=2
-        )
+        cust_entry = ttk.Entry(controls, textvariable=self.customer_var, width=32,
+                               font=("Segoe UI", 10))
+        cust_entry.grid(row=0, column=1, padx=8, columnspan=2, sticky=tk.W, pady=2)
 
-        ttk.Label(controls, text="System Audio (CABLE Output):").grid(
-            row=1, column=0, sticky=tk.W, pady=(5, 0)
-        )
+        ttk.Label(controls, text="System Audio:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.system_device_var = tk.StringVar()
         self.system_device_combo = ttk.Combobox(
-            controls, textvariable=self.system_device_var, width=45, state="readonly"
+            controls, textvariable=self.system_device_var, width=48, state="readonly",
+            font=("Segoe UI", 9)
         )
-        self.system_device_combo.grid(row=1, column=1, padx=5, pady=(5, 0), columnspan=2)
+        self.system_device_combo.grid(row=1, column=1, padx=8, columnspan=2, sticky=tk.W, pady=2)
 
-        ttk.Label(controls, text="Microphone:").grid(
-            row=2, column=0, sticky=tk.W, pady=(5, 0)
-        )
+        ttk.Label(controls, text="Microphone:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.mic_device_var = tk.StringVar()
         self.mic_device_combo = ttk.Combobox(
-            controls, textvariable=self.mic_device_var, width=45, state="readonly"
+            controls, textvariable=self.mic_device_var, width=48, state="readonly",
+            font=("Segoe UI", 9)
         )
-        self.mic_device_combo.grid(row=2, column=1, padx=5, pady=(5, 0), columnspan=2)
+        self.mic_device_combo.grid(row=2, column=1, padx=8, columnspan=2, sticky=tk.W, pady=2)
 
-        # Buttons
-        btn_frame = ttk.Frame(self.root, padding=(10, 5))
-        btn_frame.pack(fill=tk.X)
+        # Buttons row
+        btn_frame = ttk.Frame(right_frame)
+        btn_frame.pack(fill=tk.X, pady=(4, 8))
 
-        self.start_btn = ttk.Button(
-            btn_frame, text="▶ Start Recording", command=self._start
-        )
-        self.start_btn.pack(side=tk.LEFT, padx=5)
+        self.start_btn = ttk.Button(btn_frame, text="▶  Start Recording",
+                                     style="Green.TButton", command=self._start)
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self.stop_btn = ttk.Button(
-            btn_frame, text="⏹ Stop & Generate Notes", command=self._stop, state=tk.DISABLED
-        )
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        self.stop_btn = ttk.Button(btn_frame, text="⏹  Stop & Generate",
+                                    style="Red.TButton", command=self._stop, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 12))
 
-        self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(btn_frame, textvariable=self.status_var).pack(side=tk.RIGHT, padx=10)
+        # Separator
+        sep = ttk.Frame(btn_frame, width=1)
+        sep.pack(side=tk.LEFT, padx=(0, 12))
 
-        # Live transcript area
-        ttk.Label(self.root, text="Live Transcript:", padding=(10, 10, 10, 0)).pack(
-            anchor=tk.W
+        self.export_docx_btn = ttk.Button(btn_frame, text="📄 Export DOCX",
+                                           style="Export.TButton", command=self._export_docx,
+                                           state=tk.DISABLED)
+        self.export_docx_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.export_pdf_btn = ttk.Button(btn_frame, text="📑 Export PDF",
+                                          style="Export.TButton", command=self._export_pdf,
+                                          state=tk.DISABLED)
+        self.export_pdf_btn.pack(side=tk.LEFT)
+
+        # Transcript area
+        ttk.Label(right_frame, text="Live Transcript", style="Section.TLabel").pack(
+            anchor=tk.W, pady=(4, 3)
         )
         self.transcript_text = scrolledtext.ScrolledText(
-            self.root, wrap=tk.WORD, height=12, state=tk.DISABLED
+            right_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
+            bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
+            font=("Consolas", 10), borderwidth=0, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=ACCENT, padx=8, pady=6,
         )
-        self.transcript_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
+        self.transcript_text.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
-        # Generated notes area
-        ttk.Label(self.root, text="Generated Notes:", padding=(10, 5, 10, 0)).pack(
-            anchor=tk.W
+        # Notes area
+        ttk.Label(right_frame, text="Generated Notes", style="Section.TLabel").pack(
+            anchor=tk.W, pady=(2, 3)
         )
         self.notes_text = scrolledtext.ScrolledText(
-            self.root, wrap=tk.WORD, height=12, state=tk.DISABLED
+            right_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
+            bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
+            font=("Segoe UI", 10), borderwidth=0, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=ACCENT, padx=8, pady=6,
         )
-        self.notes_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.notes_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
+        # Load history on startup
+        self.root.after(500, self._refresh_history)
+
+    # --- History ---
+    def _refresh_history(self):
+        threading.Thread(target=self._load_history_bg, daemon=True).start()
+
+    def _load_history_bg(self):
+        try:
+            customers = ["(All)"] + get_all_customers()
+            selected = self.history_filter_var.get()
+            customer = None if selected == "(All)" else selected
+            items = list_sessions(customer)
+            self.root.after(0, self._update_history_ui, customers, items)
+        except Exception as e:
+            self.root.after(0, lambda: self.status_var.set(f"History load error: {e}"))
+
+    def _update_history_ui(self, customers, items):
+        self.history_filter_combo["values"] = customers
+        self._history_items = items
+        self.history_list.delete(0, tk.END)
+        for item in items:
+            ts = item["timestamp"][:16].replace("T", " ")
+            label = f"{item['customer_name']}  ·  {ts}"
+            self.history_list.insert(tk.END, label)
+
+    def _on_history_select(self, event):
+        sel = self.history_list.curselection()
+        if not sel:
+            return
+        item = self._history_items[sel[0]]
+        self._current_transcript = item.get("transcript", "")
+        self._current_notes = item.get("notes", "")
+
+        self.transcript_text.config(state=tk.NORMAL)
+        self.transcript_text.delete("1.0", tk.END)
+        self.transcript_text.insert(tk.END, self._current_transcript)
+        self.transcript_text.config(state=tk.DISABLED)
+
+        self.notes_text.config(state=tk.NORMAL)
+        self.notes_text.delete("1.0", tk.END)
+        self.notes_text.insert(tk.END, self._current_notes)
+        self.notes_text.config(state=tk.DISABLED)
+
+        self.customer_var.set(item["customer_name"])
+        self.export_docx_btn.config(state=tk.NORMAL)
+        self.export_pdf_btn.config(state=tk.NORMAL)
+        self.status_var.set(f"Loaded session from {item['timestamp'][:16]}")
+
+    # --- Export ---
+    def _export_docx(self):
+        if not self._current_notes:
+            messagebox.showinfo("Nothing to export", "No notes to export.")
+            return
+        customer = self.customer_var.get().strip() or "Notes"
+        path = filedialog.asksaveasfilename(
+            defaultextension=".docx",
+            filetypes=[("Word Document", "*.docx")],
+            initialfile=f"{customer}_notes.docx",
+        )
+        if path:
+            _md_to_docx(customer, self._current_notes, path)
+            self.status_var.set(f"Exported: {path}")
+
+    def _export_pdf(self):
+        if not self._current_notes:
+            messagebox.showinfo("Nothing to export", "No notes to export.")
+            return
+        customer = self.customer_var.get().strip() or "Notes"
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF Document", "*.pdf")],
+            initialfile=f"{customer}_notes.pdf",
+        )
+        if not path:
+            return
+        try:
+            from fpdf import FPDF
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.set_font("Helvetica", size=11)
+            for line in self._current_notes.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("## "):
+                    pdf.set_font("Helvetica", "B", 14)
+                    pdf.cell(0, 10, stripped[3:], new_x="LMARGIN", new_y="NEXT")
+                    pdf.set_font("Helvetica", size=11)
+                elif stripped.startswith("# "):
+                    pdf.set_font("Helvetica", "B", 16)
+                    pdf.cell(0, 10, stripped[2:], new_x="LMARGIN", new_y="NEXT")
+                    pdf.set_font("Helvetica", size=11)
+                elif stripped:
+                    pdf.multi_cell(0, 6, stripped)
+                else:
+                    pdf.ln(4)
+            pdf.output(path)
+            self.status_var.set(f"Exported: {path}")
+        except ImportError:
+            messagebox.showerror("Missing Library", "Install fpdf2: python -m pip install fpdf2")
+
+    # --- Device loading ---
     def _load_devices(self):
         temp = LiveTranscriber()
         devices = temp.get_audio_devices()
         self._devices = devices
         names = [f"{i}: {name}" for i, name in devices]
 
-        # Add a "None" option so either can be optional
         system_names = ["(None)"] + names
         mic_names = ["(None)"] + names
 
         self.system_device_combo["values"] = system_names
         self.mic_device_combo["values"] = mic_names
 
-        # Auto-select CABLE Output for system audio, first mic for mic
         cable_idx = None
         mic_idx = None
         for j, (i, name) in enumerate(devices):
@@ -106,17 +341,21 @@ class CallNotesApp:
         self.system_device_combo.current(cable_idx + 1 if cable_idx is not None else 0)
         self.mic_device_combo.current(mic_idx + 1 if mic_idx is not None else 0)
 
+    def _get_selected_device(self, combo):
+        idx = combo.current()
+        if idx <= 0:
+            return None
+        return self._devices[idx - 1][0]
+
+    # --- Transcript callbacks ---
     def _on_partial(self, text):
-        """Show partial (in-progress) transcript, replacing the current partial line."""
         self.root.after(0, self._safe_show_partial, text)
 
     def _on_final(self, text):
-        """Finalize the current line and move to the next."""
         self.root.after(0, self._safe_show_final, text)
 
     def _safe_show_partial(self, text):
         self.transcript_text.config(state=tk.NORMAL)
-        # Delete everything after the partial marker and replace with new partial
         self.transcript_text.delete("partial_start", "end-1c")
         self.transcript_text.insert("partial_start", text)
         self.transcript_text.see(tk.END)
@@ -124,20 +363,13 @@ class CallNotesApp:
 
     def _safe_show_final(self, text):
         self.transcript_text.config(state=tk.NORMAL)
-        # Replace partial text with final text + newline
         self.transcript_text.delete("partial_start", "end-1c")
         self.transcript_text.insert("partial_start", text + "\n")
-        # Move the marker to the end for the next partial
         self.transcript_text.mark_set("partial_start", "end-1c")
         self.transcript_text.see(tk.END)
         self.transcript_text.config(state=tk.DISABLED)
 
-    def _get_selected_device(self, combo):
-        idx = combo.current()
-        if idx <= 0:  # 0 is "(None)"
-            return None
-        return self._devices[idx - 1][0]
-
+    # --- Recording ---
     def _start(self):
         customer = self.customer_var.get().strip()
         if not customer:
@@ -151,11 +383,15 @@ class CallNotesApp:
             messagebox.showwarning("No Device", "Please select at least one audio device.")
             return
 
-        # Clear previous text
         for widget in (self.transcript_text, self.notes_text):
             widget.config(state=tk.NORMAL)
             widget.delete("1.0", tk.END)
             widget.config(state=tk.DISABLED)
+
+        self._current_transcript = ""
+        self._current_notes = ""
+        self.export_docx_btn.config(state=tk.DISABLED)
+        self.export_pdf_btn.config(state=tk.DISABLED)
 
         self.transcriber = LiveTranscriber(
             system_device=system_dev,
@@ -165,7 +401,6 @@ class CallNotesApp:
         )
         self.transcriber.start()
 
-        # Set the initial mark for partial text replacement
         self.transcript_text.config(state=tk.NORMAL)
         self.transcript_text.mark_set("partial_start", "end-1c")
         self.transcript_text.mark_gravity("partial_start", tk.LEFT)
@@ -182,6 +417,7 @@ class CallNotesApp:
         self.status_var.set("Stopping recording...")
         self.transcriber.stop()
         transcript = self.transcriber.get_full_transcript()
+        self._current_transcript = transcript
 
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
@@ -198,22 +434,39 @@ class CallNotesApp:
 
     def _generate_and_save(self, transcript):
         customer = self.customer_var.get().strip()
+        self.root.after(0, self._prepare_notes_for_streaming)
+
+        def on_chunk(text):
+            self.root.after(0, self._append_notes_chunk, text)
+
         try:
-            notes = generate_notes(transcript, customer)
+            notes = generate_notes(transcript, customer, on_chunk=on_chunk)
+            self._current_notes = notes
             filepath = save_notes(customer, notes)
-            self.root.after(0, self._show_notes, notes, filepath)
+
+            try:
+                save_session(customer, transcript, notes, filepath)
+            except Exception:
+                pass
+
+            self.root.after(0, lambda: self.status_var.set(f"Notes saved: {filepath}"))
+            self.root.after(0, lambda: self.export_docx_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.export_pdf_btn.config(state=tk.NORMAL))
+            self.root.after(0, self._refresh_history)
         except Exception as e:
             self.root.after(
                 0, lambda: messagebox.showerror("Error", f"Failed to generate notes:\n{e}")
             )
             self.root.after(0, lambda: self.status_var.set("Error generating notes."))
 
-    def _show_notes(self, notes, filepath):
+    def _prepare_notes_for_streaming(self):
         self.notes_text.config(state=tk.NORMAL)
         self.notes_text.delete("1.0", tk.END)
-        self.notes_text.insert(tk.END, notes)
-        self.notes_text.config(state=tk.DISABLED)
-        self.status_var.set(f"Notes saved: {filepath}")
+
+    def _append_notes_chunk(self, text):
+        self.notes_text.config(state=tk.NORMAL)
+        self.notes_text.insert(tk.END, text)
+        self.notes_text.see(tk.END)
 
 
 def main():

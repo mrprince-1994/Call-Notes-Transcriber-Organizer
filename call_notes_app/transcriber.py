@@ -14,25 +14,46 @@ class _TranscriptHandler(TranscriptResultStreamHandler):
 
     def __init__(self, stream, on_partial, on_final):
         super().__init__(stream)
-        self.on_partial = on_partial  # callback(text) for live partial updates
-        self.on_final = on_final      # callback(text) for finalized text
+        self.on_partial = on_partial
+        self.on_final = on_final
         self.full_transcript = []
+        self._last_speaker = None
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent):
         results = transcript_event.transcript.results
         for result in results:
             if not result.alternatives:
                 continue
-            text = result.alternatives[0].transcript.strip()
+            alt = result.alternatives[0]
+            text = alt.transcript.strip()
             if not text:
                 continue
+
+            # Extract speaker label from items
+            speaker = None
+            if alt.items:
+                for item in alt.items:
+                    if item.speaker:
+                        speaker = item.speaker
+                        break
+
             if result.is_partial:
+                display = self._format_line(speaker, text)
                 if self.on_partial:
-                    self.on_partial(text)
+                    self.on_partial(display)
             else:
-                self.full_transcript.append(text)
+                display = self._format_line(speaker, text)
+                self.full_transcript.append(display)
                 if self.on_final:
-                    self.on_final(text)
+                    self.on_final(display)
+                if speaker:
+                    self._last_speaker = speaker
+
+    def _format_line(self, speaker, text):
+        """Prefix text with speaker label if available."""
+        if speaker:
+            return f"[{speaker}]: {text}"
+        return text
 
 
 
@@ -131,6 +152,7 @@ class LiveTranscriber:
             language_code="en-US",
             media_sample_rate_hz=SAMPLE_RATE,
             media_encoding="pcm",
+            show_speaker_label=True,
         )
 
         self._handler = _TranscriptHandler(stream.output_stream, self.on_partial, self.on_final)
