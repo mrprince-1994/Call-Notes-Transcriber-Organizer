@@ -5,6 +5,9 @@ from transcriber import LiveTranscriber
 from summarizer import generate_notes
 from storage import save_notes, _md_to_docx
 from history import save_session, list_sessions, get_all_customers
+from question_detector import is_aws_aiml_question, extract_question
+from agent_client import ask_agent, warmup as warmup_agent, shutdown as shutdown_agent
+from md_render import configure_tags, MarkdownStreamer
 
 # --- Color Palette ---
 BG_DARK = "#1e1e2e"
@@ -19,6 +22,7 @@ ACCENT_HOVER = "#74c7ec"
 GREEN = "#a6e3a1"
 RED = "#f38ba8"
 ORANGE = "#fab387"
+YELLOW = "#f9e2af"
 BORDER = "#45475a"
 
 
@@ -67,6 +71,11 @@ def _apply_theme(root):
                      font=("Segoe UI", 10), padding=(6, 4), borderwidth=1)
     style.map("Small.TButton", background=[("active", BG_CARD)])
 
+    style.configure("Yellow.TButton", background=YELLOW, foreground=BG_DARK,
+                     font=("Segoe UI Semibold", 10), padding=(10, 5), borderwidth=0)
+    style.map("Yellow.TButton", background=[("active", "#fce8b8"), ("disabled", BORDER)],
+              foreground=[("disabled", FG_DIM)])
+
     style.configure("TPanedwindow", background=BG_DARK)
 
     # Section headers
@@ -78,14 +87,16 @@ def _apply_theme(root):
                      font=("Segoe UI Semibold", 14))
     style.configure("Dim.TLabel", background=BG_DARK, foreground=FG_DIM,
                      font=("Segoe UI", 9))
+    style.configure("AI.TLabel", background=BG_DARK, foreground=YELLOW,
+                     font=("Segoe UI Semibold", 10))
 
 
 class CallNotesApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Call Notes — Live Transcriber")
-        self.root.geometry("1100x780")
-        self.root.minsize(950, 650)
+        self.root.geometry("1400x800")
+        self.root.minsize(1100, 700)
         self.root.configure(bg=BG_DARK)
 
         _apply_theme(root)
@@ -93,8 +104,14 @@ class CallNotesApp:
         self.transcriber = None
         self._current_transcript = ""
         self._current_notes = ""
+        self._ai_enabled = True
+        self._pending_questions = set()  # avoid duplicate lookups
         self._build_ui()
         self._load_devices()
+
+        # Pre-start MCP servers in background so first question is fast
+        warmup_agent()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
         # Title bar
@@ -106,7 +123,7 @@ class CallNotesApp:
             side=tk.RIGHT, padx=5
         )
 
-        # Main paned window
+        # Main paned window — 3 columns
         paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
@@ -136,12 +153,12 @@ class CallNotesApp:
         self.history_list.bind("<<ListboxSelect>>", self._on_history_select)
         self._history_items = []
 
-        # --- Right: Main Content ---
-        right_frame = ttk.Frame(paned)
-        paned.add(right_frame, weight=3)
+        # --- Center: Main Content ---
+        center_frame = ttk.Frame(paned)
+        paned.add(center_frame, weight=3)
 
         # Controls card
-        controls = ttk.Frame(right_frame)
+        controls = ttk.Frame(center_frame)
         controls.pack(fill=tk.X, pady=(0, 6))
 
         ttk.Label(controls, text="Customer Name:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -167,7 +184,7 @@ class CallNotesApp:
         self.mic_device_combo.grid(row=2, column=1, padx=8, columnspan=2, sticky=tk.W, pady=2)
 
         # Buttons row
-        btn_frame = ttk.Frame(right_frame)
+        btn_frame = ttk.Frame(center_frame)
         btn_frame.pack(fill=tk.X, pady=(4, 8))
 
         self.start_btn = ttk.Button(btn_frame, text="▶  Start Recording",
@@ -178,7 +195,6 @@ class CallNotesApp:
                                     style="Red.TButton", command=self._stop, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 12))
 
-        # Separator
         sep = ttk.Frame(btn_frame, width=1)
         sep.pack(side=tk.LEFT, padx=(0, 12))
 
@@ -193,11 +209,11 @@ class CallNotesApp:
         self.export_pdf_btn.pack(side=tk.LEFT)
 
         # Transcript area
-        ttk.Label(right_frame, text="Live Transcript", style="Section.TLabel").pack(
+        ttk.Label(center_frame, text="Live Transcript", style="Section.TLabel").pack(
             anchor=tk.W, pady=(4, 3)
         )
         self.transcript_text = scrolledtext.ScrolledText(
-            right_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
+            center_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
             bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
             font=("Consolas", 10), borderwidth=0, highlightthickness=1,
             highlightbackground=BORDER, highlightcolor=ACCENT, padx=8, pady=6,
@@ -205,19 +221,164 @@ class CallNotesApp:
         self.transcript_text.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
         # Notes area
-        ttk.Label(right_frame, text="Generated Notes", style="Section.TLabel").pack(
+        ttk.Label(center_frame, text="Generated Notes", style="Section.TLabel").pack(
             anchor=tk.W, pady=(2, 3)
         )
         self.notes_text = scrolledtext.ScrolledText(
-            right_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
+            center_frame, wrap=tk.WORD, height=9, state=tk.DISABLED,
             bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
             font=("Segoe UI", 10), borderwidth=0, highlightthickness=1,
             highlightbackground=BORDER, highlightcolor=ACCENT, padx=8, pady=6,
         )
         self.notes_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
+        # --- Right: AI Answers Panel ---
+        ai_frame = ttk.LabelFrame(paned, text="  🤖 AI Answers  ", padding=8)
+        paned.add(ai_frame, weight=2)
+
+        ai_controls = ttk.Frame(ai_frame)
+        ai_controls.pack(fill=tk.X, pady=(0, 6))
+
+        self.ai_toggle_var = tk.BooleanVar(value=True)
+        self.ai_toggle_btn = ttk.Checkbutton(
+            ai_controls, text="Auto-detect questions",
+            variable=self.ai_toggle_var, command=self._toggle_ai,
+        )
+        self.ai_toggle_btn.pack(side=tk.LEFT)
+
+        ttk.Button(ai_controls, text="Clear", style="Small.TButton",
+                   command=self._clear_ai_answers).pack(side=tk.RIGHT)
+
+        # Manual question entry
+        ask_frame = ttk.Frame(ai_frame)
+        ask_frame.pack(fill=tk.X, pady=(0, 6))
+
+        self.manual_question_var = tk.StringVar()
+        self.manual_question_entry = ttk.Entry(
+            ask_frame, textvariable=self.manual_question_var,
+            font=("Segoe UI", 9),
+        )
+        self.manual_question_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.manual_question_entry.bind("<Return>", lambda e: self._ask_manual_question())
+
+        ttk.Button(ask_frame, text="Ask", style="Yellow.TButton",
+                   command=self._ask_manual_question).pack(side=tk.RIGHT)
+
+        # AI answers display
+        self.ai_text = scrolledtext.ScrolledText(
+            ai_frame, wrap=tk.WORD, state=tk.DISABLED,
+            bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_BRIGHT,
+            font=("Segoe UI", 9), borderwidth=0, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=YELLOW, padx=8, pady=6,
+        )
+        self.ai_text.pack(fill=tk.BOTH, expand=True)
+
+        # Configure rich text tags for AI panel (markdown rendering)
+        configure_tags(self.ai_text)
+
         # Load history on startup
         self.root.after(500, self._refresh_history)
+
+    def _on_close(self):
+        """Clean shutdown — stop MCP servers and close window."""
+        try:
+            shutdown_agent()
+        except Exception:
+            pass
+        self.root.destroy()
+
+    # --- AI Answers ---
+    def _toggle_ai(self):
+        self._ai_enabled = self.ai_toggle_var.get()
+
+    def _clear_ai_answers(self):
+        self.ai_text.config(state=tk.NORMAL)
+        self.ai_text.delete("1.0", tk.END)
+        self.ai_text.config(state=tk.DISABLED)
+        self._pending_questions.clear()
+
+    def _ask_manual_question(self):
+        question = self.manual_question_var.get().strip()
+        if not question:
+            return
+        self.manual_question_var.set("")
+        self._submit_question(question)
+
+    def _submit_question(self, question):
+        """Send a question to the AI agent and stream the answer."""
+        # Deduplicate — don't ask the same question twice
+        q_key = question.lower().strip()
+        if q_key in self._pending_questions:
+            return
+        self._pending_questions.add(q_key)
+
+        # Show the question in the panel
+        self.ai_text.config(state=tk.NORMAL)
+        if self.ai_text.get("1.0", "end-1c").strip():
+            self.ai_text.insert(tk.END, "\n" + "─" * 50 + "\n", "separator")
+        self.ai_text.insert(tk.END, f"❓ {question}\n", "question")
+        self.ai_text.insert(tk.END, "⏳ Searching AWS docs...\n", "status")
+        self.ai_text.see(tk.END)
+        self.ai_text.config(state=tk.DISABLED)
+
+        self._ai_streaming_started = False
+        self._ai_md_streamer = MarkdownStreamer(self.ai_text)
+
+        def on_chunk(text):
+            self.root.after(0, self._append_ai_chunk, text)
+
+        def on_result(answer, error):
+            self.root.after(0, self._finish_ai_answer, error)
+
+        ask_agent(question, callback=on_result, on_chunk=on_chunk)
+
+    def _append_ai_chunk(self, text):
+        """Append a streaming chunk to the AI answers panel with markdown rendering."""
+        self.ai_text.config(state=tk.NORMAL)
+
+        # Remove the "Searching..." status on first chunk
+        if not self._ai_streaming_started:
+            self._ai_streaming_started = True
+            pos = self.ai_text.search("⏳ Searching AWS docs...", "1.0", tk.END)
+            if pos:
+                line_end = self.ai_text.index(f"{pos} lineend+1c")
+                self.ai_text.delete(pos, line_end)
+
+        self._ai_md_streamer.feed(text)
+        self.ai_text.see(tk.END)
+        self.ai_text.config(state=tk.DISABLED)
+
+    def _finish_ai_answer(self, error):
+        """Called when the AI answer is complete (or errored)."""
+        self.ai_text.config(state=tk.NORMAL)
+
+        if error:
+            # Remove the "Searching..." status if still there
+            pos = self.ai_text.search("⏳ Searching AWS docs...", "1.0", tk.END)
+            if pos:
+                line_end = self.ai_text.index(f"{pos} lineend+1c")
+                self.ai_text.delete(pos, line_end)
+            self.ai_text.insert(tk.END, f"⚠️ {error}\n", "status")
+        else:
+            # Flush any remaining buffered markdown
+            if hasattr(self, "_ai_md_streamer"):
+                self._ai_md_streamer.flush()
+            # Add a trailing newline if needed
+            content = self.ai_text.get("end-2c", "end-1c")
+            if content != "\n":
+                self.ai_text.insert(tk.END, "\n")
+
+        self.ai_text.see(tk.END)
+        self.ai_text.config(state=tk.DISABLED)
+
+    def _check_transcript_for_questions(self, text):
+        """Called on each final transcript line to check for AWS AI/ML questions."""
+        if not self._ai_enabled:
+            return
+        if is_aws_aiml_question(text):
+            question = extract_question(text)
+            if question:
+                self._submit_question(question)
 
     # --- History ---
     def _refresh_history(self):
@@ -353,6 +514,8 @@ class CallNotesApp:
 
     def _on_final(self, text):
         self.root.after(0, self._safe_show_final, text)
+        # Check for AWS AI/ML questions in final transcript lines
+        self._check_transcript_for_questions(text)
 
     def _safe_show_partial(self, text):
         self.transcript_text.config(state=tk.NORMAL)
@@ -390,6 +553,7 @@ class CallNotesApp:
 
         self._current_transcript = ""
         self._current_notes = ""
+        self._pending_questions.clear()
         self.export_docx_btn.config(state=tk.DISABLED)
         self.export_pdf_btn.config(state=tk.DISABLED)
 

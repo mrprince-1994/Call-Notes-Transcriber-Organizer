@@ -9,7 +9,8 @@ A Windows desktop application that live-transcribes any call (Microsoft Teams, Z
 1. **Audio Capture** — Uses [VB-CABLE](https://vb-audio.com/Cable/) to route system audio (the other person's voice) and your microphone into the app simultaneously.
 2. **Live Transcription** — Streams audio to [Amazon Transcribe Streaming](https://docs.aws.amazon.com/transcribe/latest/dg/streaming.html) for real-time speech-to-text. Partial results appear as words are spoken; final results lock in as sentences complete.
 3. **Note Generation** — Sends the full transcript to Claude (Sonnet 4.6) on Amazon Bedrock, which produces comprehensive, structured notes covering discussion points, decisions, action items, and more.
-4. **Storage** — Saves notes as formatted `.docx` files to a customer-specific folder.
+4. **AI Q&A Agent** — Detects AWS-related questions during the call and automatically answers them using a Strands Agent with MCP tool integration that searches live AWS documentation. Can run locally or deployed to Amazon Bedrock AgentCore Runtime.
+5. **Storage** — Saves notes as formatted `.docx` files to a customer-specific folder.
 
 ---
 
@@ -24,6 +25,7 @@ A Windows desktop application that live-transcribes any call (Microsoft Teams, Z
 - **IAM Permissions** — your AWS user/role needs:
   - `transcribe:StartStreamTranscription`
   - `bedrock:InvokeModel`
+  - `bedrock-agentcore:*` (if using AgentCore Runtime for the Q&A agent)
 
 ---
 
@@ -43,6 +45,8 @@ pip install -r requirements.txt
 | `amazon-transcribe` | Amazon Transcribe Streaming SDK |
 | `boto3` | AWS SDK for Bedrock API calls |
 | `python-docx` | Generating formatted .docx note files |
+| `bedrock-agentcore` | AgentCore Runtime SDK for deployed agent communication |
+| `websocket-client` | WebSocket connection to AgentCore Runtime |
 
 ---
 
@@ -159,15 +163,38 @@ All settings are in `config.py`:
 
 ```
 call_notes_app/
-├── app.py              # Tkinter GUI — device selection, recording controls, display
-├── transcriber.py      # Audio capture + Amazon Transcribe Streaming integration
-├── summarizer.py       # Sends transcript to Claude on Bedrock for note generation
-├── storage.py          # Converts markdown notes to .docx and saves to customer folder
-├── config.py           # All configurable settings
-├── requirements.txt    # Python dependencies
-├── README.md           # This file
-└── AUDIO_SETUP_GUIDE.md # Detailed audio device configuration guide
+├── app.py                # Tkinter GUI — device selection, recording controls, display
+├── transcriber.py        # Audio capture + Amazon Transcribe Streaming integration
+├── summarizer.py         # Sends transcript to Claude on Bedrock for note generation
+├── storage.py            # Converts markdown notes to .docx and saves to customer folder
+├── question_detector.py  # Detects AWS-related questions in the transcript
+├── agent_client.py       # Invokes the AI Q&A agent (AgentCore, local MCP, or Bedrock fallback)
+├── history.py            # Conversation history management
+├── md_render.py          # Markdown rendering for the UI
+├── config.py             # All configurable settings
+├── requirements.txt      # Python dependencies
+├── README.md             # This file
+├── SETUP.md              # Step-by-step setup guide
+├── AUDIO_SETUP_GUIDE.md  # Detailed audio device configuration guide
+└── agentcore_agent/      # Deployable AgentCore agent
+    ├── agent.py          # Strands Agent with MCP tools for AWS doc search
+    ├── requirements.txt  # Agent-specific dependencies
+    └── README.md         # Agent deployment guide
 ```
+
+---
+
+## AI Q&A Agent
+
+The app includes an AI agent that detects AWS-related questions during calls and automatically answers them by searching live AWS documentation.
+
+### Three Modes (automatic fallback)
+
+1. **AgentCore Runtime** — If deployed, connects via WebSocket with SigV4 auth
+2. **Local MCP** — Runs the agent in-process with MCP doc search tools
+3. **Direct Bedrock** — Falls back to a simple Claude call without doc search
+
+See [`call_notes_app/agentcore_agent/README.md`](call_notes_app/agentcore_agent/README.md) for deployment instructions.
 
 ---
 

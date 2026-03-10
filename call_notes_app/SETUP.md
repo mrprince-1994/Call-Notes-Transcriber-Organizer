@@ -260,6 +260,49 @@ If you're using Kiro as your IDE, you can get guided setup assistance:
 
 ---
 
+## Step 14: Deploy the AI Q&A Agent (Optional)
+
+The app includes an AI agent that answers AWS questions detected during calls. It works locally out of the box, but you can deploy it to AgentCore Runtime for better performance.
+
+### Local mode (no deployment needed)
+
+Install the agent dependencies:
+```bash
+python -m pip install strands-agents mcp uv
+```
+
+The app will automatically use local MCP mode when these packages are available.
+
+### Deployed mode (AgentCore Runtime)
+
+For a managed, always-on agent:
+
+```bash
+pip install bedrock-agentcore-starter-toolkit
+cd call_notes_app/agentcore_agent
+agentcore configure --entrypoint agent.py --non-interactive --region us-east-1
+agentcore launch
+```
+
+After deployment, get the runtime ARN:
+```bash
+agentcore status --verbose
+```
+
+Then set it in `call_notes_app/agent_client.py`:
+```python
+AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:ACCOUNT_ID:runtime/AGENT_ID"
+```
+
+Install the WebSocket client for the desktop app to connect:
+```bash
+python -m pip install bedrock-agentcore websocket-client
+```
+
+See [`agentcore_agent/README.md`](agentcore_agent/README.md) for full details.
+
+---
+
 ## Troubleshooting
 
 | Problem | Solution |

@@ -1,0 +1,5 @@
+bedrock-agentcore
+strands-agents
+mcp
+boto3>=1.35.0
+uv

@@ -4,3 +4,7 @@ __pycache__/
 .env
 *.zip
 VBCABLE_Driver_Pack45.zip
+call_notes_app/agentcore_agent/payload.json
+call_notes_app/agentcore_agent/test_invoke.py
+.bedrock_agentcore.yaml
+.bedrock_agentcore/
