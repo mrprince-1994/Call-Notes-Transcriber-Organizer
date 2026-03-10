@@ -94,6 +94,7 @@ You need an AWS account with access to Amazon Transcribe and Amazon Bedrock.
 4. Attach these managed policies:
    - `AmazonTranscribeFullAccess`
    - `AmazonBedrockFullAccess`
+   - `AmazonBedrockAgentCoreFullAccess` (only needed if deploying the AI Q&A agent to AgentCore Runtime)
 5. Go to the user → **Security credentials** tab → **Create access key**
 6. Select **"Local code"** as the use case
 7. Copy the **Access Key ID** and **Secret Access Key** — you'll need them in the next step
@@ -260,46 +261,67 @@ If you're using Kiro as your IDE, you can get guided setup assistance:
 
 ---
 
-## Step 14: Deploy the AI Q&A Agent (Optional)
+## Step 14: Set Up the AI Q&A Agent (Optional)
 
-The app includes an AI agent that answers AWS questions detected during calls. It works locally out of the box, but you can deploy it to AgentCore Runtime for better performance.
+The app includes an AI agent that detects AWS-related questions during calls and answers them by searching live AWS documentation. It has three modes that fall back automatically:
 
-### Local mode (no deployment needed)
+1. **AgentCore Runtime** (deployed) — best performance, managed infrastructure
+2. **Local MCP** — runs on your machine, no deployment needed
+3. **Direct Bedrock** — simplest fallback, no doc search, just Claude's knowledge
+
+### Option A: Local mode (recommended to start)
 
 Install the agent dependencies:
 ```bash
 python -m pip install strands-agents mcp uv
 ```
 
-The app will automatically use local MCP mode when these packages are available.
+Then clear the runtime ARN in `call_notes_app/agent_client.py` so it uses local mode:
+```python
+AGENTCORE_RUNTIME_ARN = None
+```
 
-### Deployed mode (AgentCore Runtime)
+The app will spawn MCP doc search servers locally when you run it. First question takes ~15s (server startup), follow-ups are fast.
 
-For a managed, always-on agent:
+### Option B: Deploy to AgentCore Runtime
 
+For a managed, always-on agent with faster response times:
+
+1. Install the AgentCore CLI:
 ```bash
 pip install bedrock-agentcore-starter-toolkit
+```
+
+2. Make sure your IAM user has `AmazonBedrockAgentCoreFullAccess` (see Step 6).
+
+3. Configure and deploy:
+```bash
 cd call_notes_app/agentcore_agent
 agentcore configure --entrypoint agent.py --non-interactive --region us-east-1
 agentcore launch
 ```
 
-After deployment, get the runtime ARN:
+4. Get your runtime ARN:
 ```bash
 agentcore status --verbose
 ```
+Look for `agentRuntimeArn` in the output.
 
-Then set it in `call_notes_app/agent_client.py`:
+5. Set it in `call_notes_app/agent_client.py`:
 ```python
-AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:ACCOUNT_ID:runtime/AGENT_ID"
+AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:YOUR_ACCOUNT_ID:runtime/YOUR_AGENT_ID"
 ```
 
-Install the WebSocket client for the desktop app to connect:
+6. Install the WebSocket client:
 ```bash
 python -m pip install bedrock-agentcore websocket-client
 ```
 
-See [`agentcore_agent/README.md`](agentcore_agent/README.md) for full details.
+### Option C: No agent (just transcription and notes)
+
+If you don't want the AI Q&A feature at all, just leave `AGENTCORE_RUNTIME_ARN = None` and don't install `strands-agents` or `mcp`. The app will fall back to direct Bedrock calls for any detected questions, or you can disable the AI toggle in the app UI.
+
+See [`agentcore_agent/README.md`](agentcore_agent/README.md) for more details on the agent architecture.
 
 ---
 
@@ -315,3 +337,8 @@ See [`agentcore_agent/README.md`](agentcore_agent/README.md) for full details.
 | Can't hear audio after setting up VB-CABLE | Set up listen-through in mmsys.cpl (Step 11) |
 | Audio stopped after plugging in headset | Windows auto-switched output — set it back to CABLE Input |
 | App window doesn't open from shortcut | Check that the "Start in" path is set correctly in shortcut properties |
+| `No module named 'bedrock_agentcore'` | Run `pip install bedrock-agentcore websocket-client`, or set `AGENTCORE_RUNTIME_ARN = None` to use local mode |
+| `No module named 'strands'` | Run `pip install strands-agents mcp uv` for local agent mode |
+| Agent answers say "answering from general knowledge" | MCP servers failed to start — check that `uv` is installed (`pip install uv`) |
+| `agentcore invoke` quoting errors on Windows | Use no spaces in JSON: `agentcore invoke '{"prompt":"hello"}'` or assign to a PowerShell variable first |
+| AgentCore `AccessDeniedException` | Attach `AmazonBedrockAgentCoreFullAccess` policy to your IAM user (Step 6) |

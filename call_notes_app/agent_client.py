@@ -1,7 +1,7 @@
 """Client for invoking the AWS Q&A agent with streaming support.
 
 Supports three modes (tried in order):
-1. AgentCore Runtime (deployed) — calls the agent via HTTP POST
+1. AgentCore Runtime (deployed) — calls the agent via WebSocket + SigV4 auth
 2. Local Strands + MCP — runs agent in-process with AWS doc search tools
 3. Direct Bedrock streaming — invoke_model_with_response_stream (no tools)
 
@@ -19,7 +19,8 @@ from config import AWS_REGION, CLAUDE_MODEL_ID
 
 # Set this to your agent's runtime ARN to use the deployed AgentCore agent
 # Get it from: agentcore status --verbose (look for agentRuntimeArn)
-AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:086680834992:runtime/agent-2LqhjC2fKE"
+# Set via environment variable or edit this line directly
+AGENTCORE_RUNTIME_ARN = os.environ.get("AGENTCORE_RUNTIME_ARN", None)
 
 SYSTEM_PROMPT = """You are an AWS AI/ML expert assistant.
 
