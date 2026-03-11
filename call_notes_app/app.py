@@ -847,13 +847,25 @@ class NotesRetrieverTab:
     def _refresh_index(self):
         all_notes = scan_notes()
         self._all_notes_cache = all_notes
-        # De-dupe customers case-insensitively, preserving original casing
-        seen = {}
-        for n in all_notes:
-            key = n["customer"].lower()
-            if key not in seen:
-                seen[key] = n["customer"]
-        customers = ["(All)"] + sorted(seen.values(), key=str.lower)
+
+        # Collect all raw customer names
+        raw_names = list({n["customer"] for n in all_notes})
+
+        # Fuzzy-deduplicate: 'Common Chain' and 'Common Chains' → one entry
+        from notes_retriever import dedupe_customers
+        canonical_map = dedupe_customers(raw_names)
+
+        # Store the mapping so _get_active_notes can match against canonical names
+        self._canonical_map = canonical_map
+
+        # Unique canonical names for the dropdown
+        canonical_set = {}
+        for orig, canon in canonical_map.items():
+            key = canon.lower()
+            if key not in canonical_set:
+                canonical_set[key] = canon
+        customers = ["(All)"] + sorted(canonical_set.values(), key=str.lower)
+
         self.customer_combo.after(0, lambda: self._update_index_ui(all_notes, customers))
 
     def _update_index_ui(self, all_notes, customers):
@@ -870,6 +882,7 @@ class NotesRetrieverTab:
     def _get_active_notes(self) -> list[dict]:
         """Return notes filtered by source and customer (case-insensitive, cross-source)."""
         all_notes = getattr(self, "_all_notes_cache", None) or scan_notes()
+        canonical_map = getattr(self, "_canonical_map", {})
 
         source = self.source_filter_var.get()
         if source and source != "All Sources":
@@ -877,13 +890,13 @@ class NotesRetrieverTab:
 
         customer = self.customer_filter_var.get()
         if customer and customer != "(All)":
-            # Case-insensitive match so "RapidAI" finds notes in both sources
-            # regardless of how the subfolder is named
-            customer_lower = customer.lower()
+            # Match against canonical name so 'Common Chain' also returns 'Common Chains' notes
+            canon_selected = customer.lower()
             all_notes = [
                 n for n in all_notes
-                if n["customer"].lower() == customer_lower
-                or customer_lower in n["customer"].lower()
+                if (canonical_map.get(n["customer"], n["customer"])).lower() == canon_selected
+                or canon_selected in n["customer"].lower()
+                or n["customer"].lower() in canon_selected
             ]
         return all_notes
 

@@ -158,7 +158,62 @@ def scan_notes(sources: list[tuple[str, str]] | None = None) -> list[dict]:
     return notes
 
 
-def _build_index_text(notes_meta: list[dict], max_entries: int = 200) -> str:
+def _normalize_customer(name: str) -> str:
+    """Normalize a customer name for fuzzy comparison.
+
+    Lowercases, strips punctuation, collapses whitespace, and removes
+    common trailing plurals (s, es) so 'Common Chain' and 'Common Chains'
+    map to the same key.
+    """
+    s = name.lower()
+    s = re.sub(r"[^\w\s]", "", s)   # strip punctuation
+    s = re.sub(r"\s+", " ", s).strip()
+    # Strip trailing plural suffixes
+    s = re.sub(r"es$", "", s)
+    s = re.sub(r"s$", "", s)
+    return s
+
+
+def dedupe_customers(names: list[str]) -> dict[str, str]:
+    """Group near-duplicate customer names and return a canonical name for each.
+
+    Returns a mapping of {original_name: canonical_name} where the canonical
+    name is the shortest/simplest variant in each group (usually the singular).
+
+    Two names are considered duplicates when their normalized forms are identical
+    OR when one normalized form is a prefix of the other (handles 'BQE' vs 'BQE Core').
+    """
+    # Build groups: normalized_key → list of original names
+    groups: dict[str, list[str]] = {}
+    for name in names:
+        key = _normalize_customer(name)
+        groups.setdefault(key, []).append(name)
+
+    # Also merge groups where one key is a prefix of another
+    # e.g. 'common chain' and 'common chains' both normalize to 'common chain'
+    # but also handle 'bqe' vs 'bqe core' → keep separate (prefix only merges if diff <= 3 chars)
+    keys = sorted(groups.keys())
+    merged: dict[str, str] = {}  # key → canonical_key
+    for i, k in enumerate(keys):
+        if k in merged:
+            continue
+        for j in range(i + 1, len(keys)):
+            k2 = keys[j]
+            if k2 in merged:
+                continue
+            # Merge if one is a prefix of the other AND the suffix is short (≤3 chars)
+            if k2.startswith(k) and len(k2) - len(k) <= 3:
+                merged[k2] = k
+                groups[k].extend(groups.pop(k2, []))
+
+    # For each group, pick the canonical name: prefer shortest, then alphabetically first
+    canonical_map: dict[str, str] = {}
+    for key, orig_names in groups.items():
+        canonical = min(orig_names, key=lambda n: (len(n), n.lower()))
+        for orig in orig_names:
+            canonical_map[orig] = canonical
+
+    return canonical_map
     """Build a compact index string listing available files.
 
     Caps at max_entries to keep the index prompt manageable.
