@@ -625,24 +625,33 @@ class CallNotesApp:
 
 
 class NotesRetrieverTab:
-    """Tab 2 — query historical call notes via Claude Opus 4."""
+    """Tab 2 — multi-turn chat with historical call notes via Claude Opus 4.6."""
 
     def __init__(self, parent):
         self._notes_meta = []
+        self._conversation_history = []   # grows with each turn
         self._streaming_started = False
         self._md_streamer = None
+        self._is_responding = False
         self._build_ui(parent)
-        # Load notes index in background on startup
         threading.Thread(target=self._refresh_index, daemon=True).start()
 
     def _build_ui(self, parent):
-        # Top bar: index info + refresh
+        # Top bar
         top = ctk.CTkFrame(parent, fg_color="transparent")
         top.pack(fill=tk.X, padx=16, pady=(14, 6))
 
         ctk.CTkLabel(top, text="📂  Historical Notes Retrieval",
                      font=ctk.CTkFont("Segoe UI", 15, "bold"),
                      text_color=FG_BRIGHT).pack(side=tk.LEFT)
+
+        # New Chat button — resets conversation
+        ctk.CTkButton(
+            top, text="＋ New Chat", width=110, height=30,
+            fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG_DARK,
+            border_width=0, corner_radius=6,
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            command=self._new_chat).pack(side=tk.RIGHT, padx=(8, 0))
 
         self.refresh_btn = ctk.CTkButton(
             top, text="⟳ Refresh Index", width=130, height=30,
@@ -657,44 +666,31 @@ class NotesRetrieverTab:
             font=ctk.CTkFont("Segoe UI", 11))
         self.index_label.pack(side=tk.RIGHT, padx=(0, 12))
 
-        # Directory info
+        # Directory info bar
         dir_bar = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=6)
-        dir_bar.pack(fill=tk.X, padx=16, pady=(0, 10))
+        dir_bar.pack(fill=tk.X, padx=16, pady=(0, 8))
         ctk.CTkLabel(dir_bar, text=f"📁  {NOTES_BASE_DIR}",
                      text_color=FG_DIM, font=ctk.CTkFont("Consolas", 10),
-                     anchor="w").pack(fill=tk.X, padx=10, pady=6)
+                     anchor="w").pack(fill=tk.X, padx=10, pady=5)
 
-        # Customer filter + question row
-        ask_row = ctk.CTkFrame(parent, fg_color="transparent")
-        ask_row.pack(fill=tk.X, padx=16, pady=(0, 8))
-
-        ctk.CTkLabel(ask_row, text="Customer:", text_color=FG_DIM,
-                     font=ctk.CTkFont("Segoe UI", 12)).pack(side=tk.LEFT)
+        # Customer filter row
+        filter_row = ctk.CTkFrame(parent, fg_color="transparent")
+        filter_row.pack(fill=tk.X, padx=16, pady=(0, 6))
+        ctk.CTkLabel(filter_row, text="Scope to customer:",
+                     text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 11)).pack(side=tk.LEFT)
         self.customer_filter_var = tk.StringVar(value="(All)")
         self.customer_combo = ctk.CTkComboBox(
-            ask_row, variable=self.customer_filter_var, width=180,
+            filter_row, variable=self.customer_filter_var, width=200,
             fg_color=BG_INPUT, border_color=BORDER, button_color=BORDER,
             button_hover_color=ACCENT, dropdown_fg_color=BG_INPUT,
             dropdown_hover_color=ACCENT, text_color=FG_BRIGHT,
             font=ctk.CTkFont("Segoe UI", 11), state="readonly",
-            values=["(All)"])
-        self.customer_combo.pack(side=tk.LEFT, padx=(8, 16))
-
-        self.question_var = tk.StringVar()
-        q_entry = ctk.CTkEntry(
-            ask_row, textvariable=self.question_var,
-            fg_color=BG_INPUT, border_color=BORDER, text_color=FG_BRIGHT,
-            font=ctk.CTkFont("Segoe UI", 12), corner_radius=6,
-            placeholder_text="Ask anything about your past calls...")
-        q_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        q_entry.bind("<Return>", lambda e: self._ask())
-
-        self.ask_btn = ctk.CTkButton(
-            ask_row, text="Ask", width=80, height=36,
-            fg_color=YELLOW, hover_color=YELLOW_HOVER, text_color=BG_DARK,
-            font=ctk.CTkFont("Segoe UI", 13, "bold"), corner_radius=6,
-            command=self._ask)
-        self.ask_btn.pack(side=tk.RIGHT)
+            values=["(All)"],
+            command=lambda _: self._new_chat())   # changing scope resets chat
+        self.customer_combo.pack(side=tk.LEFT, padx=(8, 0))
+        ctk.CTkLabel(filter_row,
+                     text="  (changing scope starts a new chat)",
+                     text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 10)).pack(side=tk.LEFT)
 
         # Suggested prompts
         prompts_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -715,21 +711,20 @@ class NotesRetrieverTab:
                 command=lambda p=prompt: self._use_suggestion(p)
             ).pack(side=tk.LEFT, padx=(6, 0))
 
-        # Two-column layout: notes list + answer
+        # Two-column body: notes index | chat
         body = ctk.CTkFrame(parent, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 14))
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 0))
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=3)
         body.rowconfigure(0, weight=1)
 
-        # Left: notes index list
+        # Left: indexed notes list
         left = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=10,
                              border_width=1, border_color=BORDER)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         ctk.CTkLabel(left, text="Indexed Notes",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"),
                      text_color=ACCENT).pack(anchor=tk.W, padx=12, pady=(10, 6))
-
         list_frame = ctk.CTkFrame(left, fg_color=BG_INPUT, corner_radius=6,
                                    border_width=1, border_color=BORDER)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -744,41 +739,82 @@ class NotesRetrieverTab:
         self.notes_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Right: answer display
+        # Right: chat panel
         right = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=10,
                               border_width=1, border_color=BORDER)
         right.grid(row=0, column=1, sticky="nsew")
+        right.rowconfigure(0, weight=1)
+        right.rowconfigure(1, weight=0)
+        right.columnconfigure(0, weight=1)
 
-        ans_header = ctk.CTkFrame(right, fg_color="transparent")
-        ans_header.pack(fill=tk.X, padx=12, pady=(10, 6))
-        ctk.CTkLabel(ans_header, text="Answer",
+        # Chat header
+        chat_header = ctk.CTkFrame(right, fg_color="transparent")
+        chat_header.grid(row=0, column=0, sticky="new", padx=12, pady=(10, 4))
+        ctk.CTkLabel(chat_header, text="Chat",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"),
                      text_color=YELLOW).pack(side=tk.LEFT)
-        ctk.CTkLabel(ans_header, text="Claude Opus 4  ·  Bedrock",
+        self.turn_label = ctk.CTkLabel(
+            chat_header, text="New conversation",
+            text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 10))
+        self.turn_label.pack(side=tk.LEFT, padx=(10, 0))
+        ctk.CTkLabel(chat_header, text="Claude Opus 4.6  ·  Bedrock",
                      text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 10)).pack(side=tk.RIGHT)
-        ctk.CTkButton(ans_header, text="Clear", width=55, height=26,
-                      fg_color=BG_INPUT, hover_color=BG_CARD, text_color=ACCENT,
-                      corner_radius=6, font=ctk.CTkFont("Segoe UI", 10),
-                      command=self._clear_answer).pack(side=tk.RIGHT, padx=(0, 8))
 
-        self.answer_text = StyledText(right, font=("Segoe UI", 10))
-        self.answer_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        configure_tags(self.answer_text)
+        # Chat display (scrollable)
+        self.chat_text = StyledText(right, font=("Segoe UI", 10))
+        self.chat_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=(32, 4))
+        configure_tags(self.chat_text)
+        # Extra tags for chat bubbles
+        self.chat_text.tag_configure(
+            "user_msg", foreground=ACCENT,
+            font=("Segoe UI Semibold", 10), lmargin1=8, lmargin2=8, spacing1=6)
+        self.chat_text.tag_configure(
+            "user_label", foreground=ACCENT,
+            font=("Segoe UI", 9), spacing1=8)
+        self.chat_text.tag_configure(
+            "assistant_label", foreground=YELLOW,
+            font=("Segoe UI", 9), spacing1=8)
+
+        # Input row pinned to bottom
+        input_row = ctk.CTkFrame(right, fg_color=BG_CARD, corner_radius=0)
+        input_row.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
+        input_row.columnconfigure(0, weight=1)
+
+        self.input_var = tk.StringVar()
+        self.input_entry = ctk.CTkEntry(
+            input_row, textvariable=self.input_var,
+            fg_color=BG_INPUT, border_color=BORDER, text_color=FG_BRIGHT,
+            font=ctk.CTkFont("Segoe UI", 12), corner_radius=6,
+            placeholder_text="Ask a follow-up or start a new question...")
+        self.input_entry.grid(row=0, column=0, sticky="ew", padx=(10, 6), pady=8)
+        self.input_entry.bind("<Return>", lambda e: self._send())
+
+        self.send_btn = ctk.CTkButton(
+            input_row, text="Send ↵", width=90, height=36,
+            fg_color=YELLOW, hover_color=YELLOW_HOVER, text_color=BG_DARK,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"), corner_radius=6,
+            command=self._send)
+        self.send_btn.grid(row=0, column=1, padx=(0, 10), pady=8)
 
     # ── Actions ──
 
     def _use_suggestion(self, prompt):
-        self.question_var.set(prompt)
-        self._ask()
+        self.input_var.set(prompt)
+        self._send()
 
-    def _clear_answer(self):
-        self.answer_text.config(state=tk.NORMAL)
-        self.answer_text.delete("1.0", tk.END)
-        self.answer_text.config(state=tk.DISABLED)
+    def _new_chat(self):
+        """Reset conversation history and clear the chat display."""
+        self._conversation_history = []
+        self._is_responding = False
+        self.chat_text.config(state=tk.NORMAL)
+        self.chat_text.delete("1.0", tk.END)
+        self.chat_text.config(state=tk.DISABLED)
+        self.send_btn.configure(state=tk.NORMAL, text="Send ↵")
+        self.turn_label.configure(text="New conversation")
+        self.input_entry.focus()
 
     def _refresh_index(self):
         all_notes = scan_notes()
-        # Filter by selected customer
         selected = self.customer_filter_var.get()
         if selected and selected != "(All)":
             self._notes_meta = [n for n in all_notes if n["customer"] == selected]
@@ -786,7 +822,6 @@ class NotesRetrieverTab:
             self._notes_meta = all_notes
 
         customers = ["(All)"] + sorted({n["customer"] for n in all_notes})
-        # Update UI on main thread
         self.customer_combo.after(0, lambda: self._update_index_ui(all_notes, customers))
 
     def _update_index_ui(self, all_notes, customers):
@@ -794,73 +829,91 @@ class NotesRetrieverTab:
         count = len(all_notes)
         self.index_label.configure(
             text=f"{count} note{'s' if count != 1 else ''} indexed")
-
         self.notes_list.delete(0, tk.END)
         for note in all_notes:
             label = f"{note['customer']}  ·  {note['date'] or note['filename']}"
             self.notes_list.insert(tk.END, label)
 
-    def _ask(self):
-        question = self.question_var.get().strip()
-        if not question:
-            return
-
-        # Re-filter notes by customer selection before asking
+    def _get_active_notes(self) -> list[dict]:
+        """Return notes filtered by the current customer selection."""
         selected = self.customer_filter_var.get()
         all_notes = self._notes_meta if self._notes_meta else scan_notes()
         if selected and selected != "(All)":
-            notes_to_query = [n for n in all_notes if n["customer"] == selected]
-        else:
-            notes_to_query = all_notes
+            return [n for n in all_notes if n["customer"] == selected]
+        return all_notes
 
-        self.question_var.set("")
-        self.ask_btn.configure(state=tk.DISABLED, text="...")
+    def _send(self):
+        if self._is_responding:
+            return
+        question = self.input_var.get().strip()
+        if not question:
+            return
 
-        self.answer_text.config(state=tk.NORMAL)
-        if self.answer_text.get("1.0", "end-1c").strip():
-            self.answer_text.insert(tk.END, "\n" + "─" * 50 + "\n", "separator")
-        self.answer_text.insert(tk.END, f"❓ {question}\n", "question")
-        self.answer_text.insert(tk.END, "⏳ Reading notes and thinking...\n", "status")
-        self.answer_text.see(tk.END)
-        self.answer_text.config(state=tk.DISABLED)
+        self.input_var.set("")
+        self._is_responding = True
+        self.send_btn.configure(state=tk.DISABLED, text="...")
+
+        # Render user bubble
+        self.chat_text.config(state=tk.NORMAL)
+        self.chat_text.insert(tk.END, "You\n", "user_label")
+        self.chat_text.insert(tk.END, f"{question}\n\n", "user_msg")
+        self.chat_text.insert(tk.END, "Assistant\n", "assistant_label")
+        self.chat_text.insert(tk.END, "⏳ Reading notes and thinking...\n", "status")
+        self.chat_text.see(tk.END)
+        self.chat_text.config(state=tk.DISABLED)
 
         self._streaming_started = False
-        self._md_streamer = MarkdownStreamer(self.answer_text)
+        self._md_streamer = MarkdownStreamer(self.chat_text)
 
         def on_chunk(text):
-            self.answer_text.after(0, self._append_chunk, text)
+            self.chat_text.after(0, self._append_chunk, text)
 
         def on_done(answer, error):
-            self.answer_text.after(0, self._finish, error)
+            self.chat_text.after(0, self._finish, error)
 
-        ask_notes_agent(question, notes_to_query, on_chunk=on_chunk, callback=on_done)
+        ask_notes_agent(
+            question,
+            self._get_active_notes(),
+            self._conversation_history,
+            on_chunk=on_chunk,
+            callback=on_done,
+        )
 
     def _append_chunk(self, text):
-        self.answer_text.config(state=tk.NORMAL)
+        self.chat_text.config(state=tk.NORMAL)
         if not self._streaming_started:
             self._streaming_started = True
-            pos = self.answer_text.search("⏳ Reading notes and thinking...", "1.0", tk.END)
+            pos = self.chat_text.search("⏳ Reading notes and thinking...", "1.0", tk.END)
             if pos:
-                self.answer_text.delete(pos, f"{pos} lineend+1c")
+                self.chat_text.delete(pos, f"{pos} lineend+1c")
         self._md_streamer.feed(text)
-        self.answer_text.see(tk.END)
-        self.answer_text.config(state=tk.DISABLED)
+        self.chat_text.see(tk.END)
+        self.chat_text.config(state=tk.DISABLED)
 
     def _finish(self, error):
-        self.answer_text.config(state=tk.NORMAL)
+        self.chat_text.config(state=tk.NORMAL)
         if error:
-            pos = self.answer_text.search("⏳ Reading notes and thinking...", "1.0", tk.END)
+            pos = self.chat_text.search("⏳ Reading notes and thinking...", "1.0", tk.END)
             if pos:
-                self.answer_text.delete(pos, f"{pos} lineend+1c")
-            self.answer_text.insert(tk.END, f"⚠️ {error}\n", "status")
+                self.chat_text.delete(pos, f"{pos} lineend+1c")
+            self.chat_text.insert(tk.END, f"⚠️ {error}\n", "status")
         else:
             if self._md_streamer:
                 self._md_streamer.flush()
-            if self.answer_text.get("end-2c", "end-1c") != "\n":
-                self.answer_text.insert(tk.END, "\n")
-        self.answer_text.see(tk.END)
-        self.answer_text.config(state=tk.DISABLED)
-        self.ask_btn.configure(state=tk.NORMAL, text="Ask")
+            if self.chat_text.get("end-2c", "end-1c") != "\n":
+                self.chat_text.insert(tk.END, "\n")
+        self.chat_text.insert(tk.END, "\n", "body")  # spacer between turns
+        self.chat_text.see(tk.END)
+        self.chat_text.config(state=tk.DISABLED)
+
+        # Update turn counter
+        turns = len(self._conversation_history) // 2
+        self.turn_label.configure(
+            text=f"{turns} turn{'s' if turns != 1 else ''} in this conversation")
+
+        self._is_responding = False
+        self.send_btn.configure(state=tk.NORMAL, text="Send ↵")
+        self.input_entry.focus()
 
 
 def main():

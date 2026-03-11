@@ -1,7 +1,10 @@
 """Retrieval agent for historical call notes stored as .docx files.
 
 Scans NOTES_BASE_DIR recursively for .docx files, extracts their text,
-and uses Claude Opus 4 on Bedrock to answer questions about the content.
+and uses Claude Opus 4.6 on Bedrock for multi-turn conversation about the content.
+
+The notes context is injected once at the start of the conversation (first user turn).
+Subsequent turns pass only the growing message history, keeping latency low.
 """
 import json
 import os
@@ -17,9 +20,9 @@ OPUS_MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
 RETRIEVAL_SYSTEM_PROMPT = """You are an expert assistant that helps retrieve and synthesize \
 information from historical customer call notes.
 
-You will be given a collection of call notes from past customer meetings, each labeled with \
-the customer name, filename, and date. Your job is to answer questions about these notes \
-accurately and helpfully.
+At the start of each conversation you are given a collection of call notes from past customer \
+meetings, each labeled with the customer name, filename, and date. Use these notes as your \
+primary source of truth throughout the conversation.
 
 Guidelines:
 - Always cite which customer and which note file your answer comes from
@@ -28,7 +31,9 @@ Guidelines:
 - Be specific: include names, dates, numbers, and commitments mentioned in the notes
 - Format your response in clean markdown with clear sections
 - If asked about a specific customer, focus on their notes
-- Highlight action items, decisions, and follow-ups when relevant"""
+- Highlight action items, decisions, and follow-ups when relevant
+- Remember context from earlier in the conversation — the user may ask follow-up questions \
+  that refer back to previous answers"""
 
 
 def _read_docx_text(filepath: str) -> str:
@@ -48,19 +53,15 @@ def scan_notes(base_dir: str = NOTES_BASE_DIR) -> list[dict]:
         return notes
 
     for root, dirs, files in os.walk(base_dir):
-        # Skip hidden/system dirs
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for fname in sorted(files):
             if not fname.endswith(".docx"):
                 continue
             full_path = os.path.join(root, fname)
-            # Customer name is the subfolder name relative to base_dir
             rel = os.path.relpath(root, base_dir)
             customer = rel if rel != "." else os.path.splitext(fname)[0]
-            # Try to extract date from filename (format: name_notes_N_YYYY-MM-DD_HH-MM.docx)
             date_str = ""
-            parts = fname.replace(".docx", "").split("_")
-            for i, p in enumerate(parts):
+            for p in fname.replace(".docx", "").split("_"):
                 if len(p) == 10 and p.count("-") == 2:
                     date_str = p
                     break
@@ -75,7 +76,7 @@ def scan_notes(base_dir: str = NOTES_BASE_DIR) -> list[dict]:
 
 
 def build_context(notes_meta: list[dict], max_chars: int = 180_000) -> str:
-    """Read note files and build a context string for the LLM."""
+    """Read note files and build a context string for the first LLM turn."""
     parts = []
     total = 0
     for note in notes_meta:
@@ -87,7 +88,6 @@ def build_context(notes_meta: list[dict], max_chars: int = 180_000) -> str:
         )
         entry = header + text + "\n\n"
         if total + len(entry) > max_chars:
-            # Truncate this entry to fit
             remaining = max_chars - total - len(header) - 100
             if remaining > 200:
                 entry = header + text[:remaining] + "\n[...truncated...]\n\n"
@@ -102,10 +102,21 @@ def build_context(notes_meta: list[dict], max_chars: int = 180_000) -> str:
 def ask_notes_agent(
     question: str,
     notes_meta: list[dict],
+    conversation_history: list[dict],
     on_chunk=None,
     callback=None,
 ):
-    """Ask a question about the historical notes. Streams response via on_chunk."""
+    """Send a message in a multi-turn conversation about the historical notes.
+
+    Args:
+        question: The user's current message.
+        notes_meta: List of note file metadata (from scan_notes).
+        conversation_history: Mutable list of {"role": ..., "content": ...} dicts.
+            Pass an empty list for a new conversation. This list is updated in-place
+            with the new user message and assistant reply after each turn.
+        on_chunk: Called with each streamed text chunk.
+        callback: Called with (full_answer, error) when done.
+    """
 
     def _run():
         try:
@@ -121,7 +132,18 @@ def ask_notes_agent(
                     callback(answer, None)
                 return
 
-            context = build_context(notes_meta)
+            # First turn: prepend the notes context to the user message
+            if not conversation_history:
+                context = build_context(notes_meta)
+                user_content = (
+                    f"Here are the historical call notes for this conversation:\n\n"
+                    f"{context}\n\n---\n\n{question}"
+                )
+            else:
+                user_content = question
+
+            # Append the new user turn
+            conversation_history.append({"role": "user", "content": user_content})
 
             client = boto3.client(
                 "bedrock-runtime",
@@ -129,16 +151,11 @@ def ask_notes_agent(
                 config=Config(read_timeout=300),
             )
 
-            user_message = (
-                f"Here are the historical call notes:\n\n{context}\n\n"
-                f"---\n\nQuestion: {question}"
-            )
-
             payload = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 8192,
                 "system": RETRIEVAL_SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": user_message}],
+                "messages": conversation_history,
             }
 
             response = client.invoke_model_with_response_stream(
@@ -159,10 +176,17 @@ def ask_notes_agent(
                             on_chunk(text)
 
             answer = "".join(full_text)
+
+            # Append the assistant reply to history for the next turn
+            conversation_history.append({"role": "assistant", "content": answer})
+
             if callback:
                 callback(answer, None)
 
         except Exception as e:
+            # Remove the user message we just appended so history stays consistent
+            if conversation_history and conversation_history[-1]["role"] == "user":
+                conversation_history.pop()
             err = f"Error querying notes: {e}"
             if on_chunk:
                 on_chunk(err)
