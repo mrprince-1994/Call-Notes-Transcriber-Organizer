@@ -66,19 +66,21 @@ def _add_formatted_text(paragraph, text):
 
 def save_notes(customer_name: str, notes_content: str) -> str:
     """
-    Save notes as .docx to: Call Notes/{customer_name}/{customer_name}_notes_{N}_{datetime}.docx
+    Save notes as .md to: Call Notes/{customer_name}/{customer_name}_notes_{N}_{datetime}.md
     Returns the full path of the saved file.
     """
     customer_dir = os.path.join(NOTES_BASE_DIR, customer_name)
     os.makedirs(customer_dir, exist_ok=True)
 
-    existing = [f for f in os.listdir(customer_dir) if f.endswith(".docx")]
+    existing = [f for f in os.listdir(customer_dir) if f.endswith(".md")]
     next_num = len(existing) + 1
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = f"{customer_name}_notes_{next_num}_{timestamp}.docx"
+    filename = f"{customer_name}_notes_{next_num}_{timestamp}.md"
     filepath = os.path.join(customer_dir, filename)
 
-    _md_to_docx(customer_name, notes_content, filepath)
+    header = f"# Call Notes — {customer_name}\n\n_Date: {datetime.now().strftime('%B %d, %Y %I:%M %p')}_\n\n---\n\n"
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(header + notes_content)
 
     return filepath
