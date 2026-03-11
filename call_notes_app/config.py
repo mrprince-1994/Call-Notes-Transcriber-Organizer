@@ -10,8 +10,9 @@ CHANNELS = 1
 # Notes output directory — your personal call notes
 NOTES_BASE_DIR = r"C:\Users\mrprince\OneDrive - amazon.com\mrprince SMB WE - Documents\Call Notes"
 
-# SA team shared folder (Ayman & Sanghwa use-case notes)
-SA_NOTES_DIR = r"C:\Users\mrprince\amazon.com\Reddy, Chandra - SMB Team Folder"
+# SA Specialist SA note directories
+SANGHWA_NOTES_DIR = r"C:\Users\mrprince\amazon.com\Reddy, Chandra - SMB Team Folder\Customer Docs\Sanghwa Customer Docs"
+AYMAN_NOTES_DIR   = r"C:\Users\mrprince\amazon.com\Reddy, Chandra - SMB Team Folder\Customer Docs\Ayman Customer Docs"
 
 # Claude model ID on Bedrock
 CLAUDE_MODEL_ID = "us.anthropic.claude-sonnet-4-6"

@@ -13,15 +13,16 @@ import boto3
 from botocore.config import Config
 from docx import Document
 import re
-from config import AWS_REGION, NOTES_BASE_DIR, SA_NOTES_DIR
+from config import AWS_REGION, NOTES_BASE_DIR, SANGHWA_NOTES_DIR, AYMAN_NOTES_DIR
 
 # Claude Opus 4.6 for deep retrieval reasoning
 OPUS_MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
 
 # All indexed sources: (directory_path, display_label)
 NOTE_SOURCES = [
-    (NOTES_BASE_DIR, "My Notes"),
-    (SA_NOTES_DIR,   "SA Team"),
+    (NOTES_BASE_DIR,      "My Notes"),
+    (SANGHWA_NOTES_DIR,   "Sanghwa"),
+    (AYMAN_NOTES_DIR,     "Ayman"),
 ]
 
 RETRIEVAL_SYSTEM_PROMPT = """You are an expert assistant that helps retrieve and synthesize \
@@ -184,7 +185,8 @@ def ask_notes_agent(
                 answer = (
                     "No call notes found in the configured directories.\n\n"
                     f"- My Notes: `{NOTES_BASE_DIR}`\n"
-                    f"- SA Team: `{SA_NOTES_DIR}`\n\n"
+                    f"- Sanghwa: `{SANGHWA_NOTES_DIR}`\n"
+                    f"- Ayman: `{AYMAN_NOTES_DIR}`\n\n"
                     "Make sure at least one directory exists and contains .docx files."
                 )
                 if on_chunk:
