@@ -644,7 +644,7 @@ class NotesRetrieverTab:
                      font=ctk.CTkFont("Segoe UI", 15, "bold"),
                      text_color=FG_BRIGHT).pack(side=tk.LEFT)
 
-        # New Chat button — resets conversation
+        # New Chat button
         ctk.CTkButton(
             top, text="＋ New Chat", width=110, height=30,
             fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG_DARK,
@@ -660,19 +660,53 @@ class NotesRetrieverTab:
             command=lambda: threading.Thread(target=self._refresh_index, daemon=True).start())
         self.refresh_btn.pack(side=tk.RIGHT)
 
+        # Clickable index summary — click to expand/collapse the index panel
         self.index_label = ctk.CTkLabel(
-            top, text="Scanning...", text_color=FG_DIM,
-            font=ctk.CTkFont("Segoe UI", 11))
+            top, text="Scanning...", text_color=ACCENT,
+            font=ctk.CTkFont("Segoe UI", 11, "underline"), cursor="hand2")
         self.index_label.pack(side=tk.RIGHT, padx=(0, 12))
+        self.index_label.bind("<Button-1>", lambda e: self._toggle_index_panel())
 
-        # Directory info bar — show all configured sources
+        # Collapsible index panel (hidden by default)
+        self._index_panel_visible = False
+        self._index_panel = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=8,
+                                          border_width=1, border_color=BORDER)
+        # Don't pack yet — toggled on demand
+
+        index_header = ctk.CTkFrame(self._index_panel, fg_color="transparent")
+        index_header.pack(fill=tk.X, padx=10, pady=(8, 4))
+        ctk.CTkLabel(index_header, text="Indexed Notes",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=ACCENT).pack(side=tk.LEFT)
+        ctk.CTkButton(index_header, text="✕", width=28, height=24,
+                      fg_color="transparent", hover_color=BG_INPUT,
+                      text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 11),
+                      command=self._toggle_index_panel).pack(side=tk.RIGHT)
+
+        list_frame = ctk.CTkFrame(self._index_panel, fg_color=BG_INPUT, corner_radius=6)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.notes_list = tk.Listbox(
+            list_frame, bg=BG_INPUT, fg=FG_TEXT,
+            selectbackground=ACCENT, selectforeground=BG_DARK,
+            font=("Segoe UI", 9), borderwidth=0, highlightthickness=0,
+            activestyle="none", height=12)
+        sb = tk.Scrollbar(list_frame, command=self.notes_list.yview,
+                          bg=BG_INPUT, troughcolor=BG_INPUT, bd=0)
+        self.notes_list.configure(yscrollcommand=sb.set)
+        self.notes_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Keep a reference so _toggle_index_panel can insert after it
+        self._top_bar = top
+
+        # Directory info bar
         dir_bar = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=6)
         dir_bar.pack(fill=tk.X, padx=16, pady=(0, 8))
         for _, label in NOTE_SOURCES:
             ctk.CTkLabel(dir_bar, text=f"📁  {label}",
                          text_color=FG_DIM, font=ctk.CTkFont("Consolas", 10),
                          anchor="w").pack(fill=tk.X, padx=10, pady=(4, 0))
-        ctk.CTkFrame(dir_bar, fg_color="transparent", height=4).pack()  # bottom padding
+        ctk.CTkFrame(dir_bar, fg_color="transparent", height=4).pack()
 
         # Source + customer filter row
         filter_row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -727,44 +761,16 @@ class NotesRetrieverTab:
                 command=lambda p=prompt: self._use_suggestion(p)
             ).pack(side=tk.LEFT, padx=(6, 0))
 
-        # Two-column body: notes index | chat
-        body = ctk.CTkFrame(parent, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 0))
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=3)
-        body.rowconfigure(0, weight=1)
-
-        # Left: indexed notes list
-        left = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=10,
-                             border_width=1, border_color=BORDER)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        ctk.CTkLabel(left, text="Indexed Notes",
-                     font=ctk.CTkFont("Segoe UI", 12, "bold"),
-                     text_color=ACCENT).pack(anchor=tk.W, padx=12, pady=(10, 6))
-        list_frame = ctk.CTkFrame(left, fg_color=BG_INPUT, corner_radius=6,
+        # Chat panel — full width now that the index list is hidden by default
+        chat_outer = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=10,
                                    border_width=1, border_color=BORDER)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.notes_list = tk.Listbox(
-            list_frame, bg=BG_INPUT, fg=FG_TEXT,
-            selectbackground=ACCENT, selectforeground=BG_DARK,
-            font=("Segoe UI", 9), borderwidth=0, highlightthickness=0,
-            activestyle="none")
-        sb = tk.Scrollbar(list_frame, command=self.notes_list.yview,
-                          bg=BG_INPUT, troughcolor=BG_INPUT, bd=0)
-        self.notes_list.configure(yscrollcommand=sb.set)
-        self.notes_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Right: chat panel
-        right = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=10,
-                              border_width=1, border_color=BORDER)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(0, weight=1)
-        right.rowconfigure(1, weight=0)
-        right.columnconfigure(0, weight=1)
+        chat_outer.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 0))
+        chat_outer.rowconfigure(0, weight=1)
+        chat_outer.rowconfigure(1, weight=0)
+        chat_outer.columnconfigure(0, weight=1)
 
         # Chat header
-        chat_header = ctk.CTkFrame(right, fg_color="transparent")
+        chat_header = ctk.CTkFrame(chat_outer, fg_color="transparent")
         chat_header.grid(row=0, column=0, sticky="new", padx=12, pady=(10, 4))
         ctk.CTkLabel(chat_header, text="Chat",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"),
@@ -776,11 +782,10 @@ class NotesRetrieverTab:
         ctk.CTkLabel(chat_header, text="Claude Opus 4.6  ·  Bedrock",
                      text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 10)).pack(side=tk.RIGHT)
 
-        # Chat display (scrollable)
-        self.chat_text = StyledText(right, font=("Segoe UI", 10))
+        # Chat display
+        self.chat_text = StyledText(chat_outer, font=("Segoe UI", 10))
         self.chat_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=(32, 4))
         configure_tags(self.chat_text)
-        # Extra tags for chat bubbles
         self.chat_text.tag_configure(
             "user_msg", foreground=ACCENT,
             font=("Segoe UI Semibold", 10), lmargin1=8, lmargin2=8, spacing1=6)
@@ -792,7 +797,7 @@ class NotesRetrieverTab:
             font=("Segoe UI", 9), spacing1=8)
 
         # Input row pinned to bottom
-        input_row = ctk.CTkFrame(right, fg_color=BG_CARD, corner_radius=0)
+        input_row = ctk.CTkFrame(chat_outer, fg_color=BG_CARD, corner_radius=0)
         input_row.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
         input_row.columnconfigure(0, weight=1)
 
@@ -813,6 +818,16 @@ class NotesRetrieverTab:
         self.send_btn.grid(row=0, column=1, padx=(0, 10), pady=8)
 
     # ── Actions ──
+
+    def _toggle_index_panel(self):
+        if self._index_panel_visible:
+            self._index_panel.pack_forget()
+            self._index_panel_visible = False
+        else:
+            self._index_panel.pack(
+                fill=tk.X, padx=16, pady=(0, 8),
+                after=self._top_bar)
+            self._index_panel_visible = True
 
     def _use_suggestion(self, prompt):
         self.input_var.set(prompt)
