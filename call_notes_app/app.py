@@ -663,7 +663,7 @@ class NotesRetrieverTab:
         # Clickable index summary — click to expand/collapse the index panel
         self.index_label = ctk.CTkLabel(
             top, text="Scanning...", text_color=ACCENT,
-            font=ctk.CTkFont("Segoe UI", 11, "underline"), cursor="hand2")
+            font=ctk.CTkFont("Segoe UI", 11), cursor="hand2")
         self.index_label.pack(side=tk.RIGHT, padx=(0, 12))
         self.index_label.bind("<Button-1>", lambda e: self._toggle_index_panel())
 
