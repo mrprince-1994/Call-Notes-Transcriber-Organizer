@@ -12,6 +12,7 @@ import threading
 import boto3
 from botocore.config import Config
 from docx import Document
+import re
 from config import AWS_REGION, NOTES_BASE_DIR, SA_NOTES_DIR
 
 # Claude Opus 4.6 for deep retrieval reasoning
@@ -52,8 +53,42 @@ def _read_docx_text(filepath: str) -> str:
         return f"[Error reading file: {e}]"
 
 
+# Matches SA-style filenames: [MM_DD] CustomerName - Topic.docx
+# Also handles [MM_DD][tag] CustomerName - Topic.docx
+_SA_FILENAME_RE = re.compile(
+    r"^\[[\d_]+\](?:\[.*?\])?\s*(.+?)\s*(?:-\s*.+)?\.docx$",
+    re.IGNORECASE,
+)
+
+
+def _customer_from_filename(fname: str) -> str | None:
+    """Extract customer name from SA-style filename, e.g. '[03_07] Classmates - Topic.docx'."""
+    m = _SA_FILENAME_RE.match(fname)
+    if not m:
+        return None
+    # The captured group may still have " - Topic" if the regex didn't split it
+    # Split on first " - " to isolate just the customer name
+    raw = m.group(1)
+    customer = raw.split(" - ")[0].strip()
+    return customer if customer else None
+
+
+def _date_from_sa_filename(fname: str) -> str:
+    """Extract date hint from SA-style filename bracket, e.g. '[03_07]' -> '03-07'."""
+    m = re.match(r"^\[(\d{2})_(\d{2})\]", fname)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return ""
+
+
 def scan_notes(sources: list[tuple[str, str]] | None = None) -> list[dict]:
-    """Scan one or more directories and return metadata for all .docx files.
+    """Scan one or more directories recursively for .docx files.
+
+    Handles two naming conventions:
+    - My Notes style: files live in per-customer subfolders
+      e.g. Call Notes/RapidAI/RapidAI_notes_1_2025-03-01.docx
+    - SA Team style: files named with customer in the filename
+      e.g. Sanghwa Customer Docs/2025/[03_07] Classmates - Topic.docx
 
     Args:
         sources: List of (directory_path, source_label) tuples.
@@ -73,12 +108,21 @@ def scan_notes(sources: list[tuple[str, str]] | None = None) -> list[dict]:
                     continue
                 full_path = os.path.join(root, fname)
                 rel = os.path.relpath(root, base_dir)
-                customer = rel if rel != "." else os.path.splitext(fname)[0]
-                date_str = ""
-                for p in fname.replace(".docx", "").split("_"):
-                    if len(p) == 10 and p.count("-") == 2:
-                        date_str = p
-                        break
+
+                # Try SA-style: customer name embedded in filename
+                customer = _customer_from_filename(fname)
+                date_str = _date_from_sa_filename(fname) if customer else ""
+
+                if not customer:
+                    # My Notes style: customer is the immediate subfolder name
+                    parts = rel.replace("\\", "/").split("/")
+                    customer = parts[0] if parts[0] != "." else os.path.splitext(fname)[0]
+                    # Extract date from filename (YYYY-MM-DD pattern)
+                    for p in fname.replace(".docx", "").split("_"):
+                        if len(p) == 10 and p.count("-") == 2:
+                            date_str = p
+                            break
+
                 notes.append({
                     "customer": customer,
                     "filename": fname,
