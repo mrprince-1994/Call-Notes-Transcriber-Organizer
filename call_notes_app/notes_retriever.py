@@ -472,8 +472,15 @@ def ask_research_agent(
                     "max_tokens": 4096,
                     "system": (
                         "You are an expert customer research analyst helping an AWS account manager. "
-                        "Provide structured research briefs covering company overview, recent news, "
-                        "tech stack, AWS relevance, and talking points."
+                        "Produce a comprehensive business brief with these sections: "
+                        "1) Business Overview — what they do, products, industry, size, recent news; "
+                        "2) AI/ML Solutions in Production — any shipped AI/ML capabilities; "
+                        "3) AI/ML Use Cases & Industry Success Stories — 3-5 high-impact use cases "
+                        "similar companies have deployed, with specific AWS services; "
+                        "4) Recommended Talking Points — 4-6 actionable conversation starters "
+                        "tied to business outcomes and AWS capabilities. "
+                        "Note: web search tools are not available in this mode. "
+                        "Answer from your training knowledge and note any limitations."
                     ),
                     "messages": conversation_history,
                 }
