@@ -14,5 +14,19 @@ NOTES_BASE_DIR = r"C:\Users\mrprince\OneDrive - amazon.com\mrprince SMB WE - Doc
 SANGHWA_NOTES_DIR = r"C:\Users\mrprince\amazon.com\Reddy, Chandra - SMB Team Folder\Customer Docs\Sanghwa Customer Docs"
 AYMAN_NOTES_DIR   = r"C:\Users\mrprince\amazon.com\Reddy, Chandra - SMB Team Folder\Customer Docs\Ayman Customer Docs"
 
-# Claude model ID on Bedrock
+# Claude model IDs on Bedrock
 CLAUDE_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+
+# AgentCore Runtime ARNs
+AGENTCORE_RUNTIME_ARN = os.environ.get(
+    "AGENTCORE_RUNTIME_ARN",
+    "arn:aws:bedrock-agentcore:us-east-1:086680834992:runtime/agent-2LqhjC2fKE"
+)
+RETRIEVAL_AGENT_ARN = os.environ.get(
+    "RETRIEVAL_AGENT_ARN",
+    "arn:aws:bedrock-agentcore:us-east-1:086680834992:runtime/agent-2LqhjC2fKE"
+)
+RESEARCH_AGENT_ARN = os.environ.get(
+    "RESEARCH_AGENT_ARN",
+    "arn:aws:bedrock-agentcore:us-east-1:086680834992:runtime/researchagent-4i3Uyh3OJh"
+)

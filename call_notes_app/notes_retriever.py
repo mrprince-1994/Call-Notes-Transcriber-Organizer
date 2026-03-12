@@ -11,11 +11,7 @@ import re
 import threading
 import boto3
 from botocore.config import Config
-from config import AWS_REGION, NOTES_BASE_DIR, SANGHWA_NOTES_DIR, AYMAN_NOTES_DIR
-
-# ARN of the deployed retrieval agent (set via env var after agentcore launch)
-RETRIEVAL_AGENT_ARN = os.environ.get("RETRIEVAL_AGENT_ARN", "")
-RESEARCH_AGENT_ARN  = os.environ.get("RESEARCH_AGENT_ARN", "")
+from config import AWS_REGION, NOTES_BASE_DIR, SANGHWA_NOTES_DIR, AYMAN_NOTES_DIR, RETRIEVAL_AGENT_ARN, RESEARCH_AGENT_ARN
 
 OPUS_MODEL_ID   = "us.anthropic.claude-opus-4-6-v1"
 SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
