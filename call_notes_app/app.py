@@ -12,24 +12,24 @@ from md_render import configure_tags, MarkdownStreamer
 from notes_retriever import scan_notes, ask_notes_agent, ask_research_agent, NOTE_SOURCES, dedupe_customers
 from chat_history import save_chat_session, list_chat_sessions, load_chat_session, delete_chat_session, _ensure_table
 
-# --- Color Palette ---
-BG_DARK = "#0f0f1a"
-BG_PANEL = "#1a1a2e"
-BG_INPUT = "#252540"
-BG_CARD = "#1e1e35"
-FG_TEXT = "#d8ddf4"
-FG_DIM = "#a6adc8"
-FG_BRIGHT = "#ffffff"
-ACCENT = "#89b4fa"
-ACCENT_HOVER = "#74c7ec"
-GREEN = "#a6e3a1"
-GREEN_HOVER = "#b5f0b0"
-RED = "#f38ba8"
-RED_HOVER = "#f5a0b8"
-ORANGE = "#fab387"
-YELLOW = "#f9e2af"
-YELLOW_HOVER = "#fce8b8"
-BORDER = "#313150"
+# --- Color Palette (monochrome) ---
+BG_DARK = "#0a0a0a"
+BG_PANEL = "#141414"
+BG_INPUT = "#1e1e1e"
+BG_CARD = "#1a1a1a"
+FG_TEXT = "#d4d4d4"
+FG_DIM = "#8a8a8a"
+FG_BRIGHT = "#f0f0f0"
+ACCENT = "#ffffff"
+ACCENT_HOVER = "#e0e0e0"
+GREEN = "#a0a0a0"
+GREEN_HOVER = "#b8b8b8"
+RED = "#c0c0c0"
+RED_HOVER = "#d8d8d8"
+ORANGE = "#b0b0b0"
+YELLOW = "#e8e8e8"
+YELLOW_HOVER = "#f5f5f5"
+BORDER = "#2e2e2e"
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
