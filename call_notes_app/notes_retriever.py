@@ -471,30 +471,46 @@ def _execute_web_search(query: str) -> str:
     import urllib.parse
 
     results = []
-    # Primary: duckduckgo-search package
+
+    # Primary: ddgs package (formerly duckduckgo-search)
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=5))
+    except ImportError:
+        # Try old package name as fallback
+        try:
+            from duckduckgo_search import DDGS as DDGS_Old
+            with DDGS_Old() as ddgs:
+                results = list(ddgs.text(query, max_results=5))
+        except Exception:
+            pass
     except Exception:
-        # Fallback: HTML scraper
+        pass
+
+    # Fallback: HTML scraper if no results from package
+    if not results:
         try:
             encoded = urllib.parse.quote_plus(query)
             url = f"https://html.duckduckgo.com/html/?q={encoded}"
             req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
-                "Accept": "text/html",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                              "Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
             })
             with urllib.request.urlopen(req, timeout=15) as resp:
                 html = resp.read().decode("utf-8", errors="replace")
             blocks = re.findall(r"result__body.*?(?=result__body|$)", html, re.DOTALL)
             for block in blocks[:5]:
                 title_m = re.search(r'result__a[^>]*>(.*?)</a>', block, re.DOTALL)
+                url_m = re.search(r'result__url[^>]*>\s*(.*?)\s*</span>', block, re.DOTALL)
                 snip_m = re.search(r'result__snippet[^>]*>(.*?)</span>', block, re.DOTALL)
                 title = re.sub(r"<[^>]+>", "", title_m.group(1)).strip() if title_m else ""
+                link = re.sub(r"<[^>]+>", "", url_m.group(1)).strip() if url_m else ""
                 snip = re.sub(r"<[^>]+>", "", snip_m.group(1)).strip() if snip_m else ""
                 if title or snip:
-                    results.append({"title": title, "body": snip})
+                    results.append({"title": title, "href": link, "body": snip})
         except Exception as e2:
             return f"Search error: {e2}"
 

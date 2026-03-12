@@ -116,18 +116,29 @@ def web_search(query: str, max_results: int = 5) -> str:
     """
     results = []
 
-    # Primary: duckduckgo-search package
+    # Primary: ddgs package (formerly duckduckgo-search)
     try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
+        from ddgs import DDGS as DDGS_New
+        with DDGS_New() as ddgs:
             hits = list(ddgs.text(query, max_results=max_results))
         results = hits
-    except Exception as e1:
-        # Fallback: HTML scraper
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                hits = list(ddgs.text(query, max_results=max_results))
+            results = hits
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Fallback: HTML scraper if no results from package
+    if not results:
         try:
             results = _ddg_html_search(query, max_results)
         except Exception as e2:
-            return f"Search error for '{query}': primary={e1}, fallback={e2}"
+            return f"Search error: {e2}"
 
     if not results:
         return f"No results found for: {query}"
