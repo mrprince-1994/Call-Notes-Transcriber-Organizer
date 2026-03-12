@@ -9,6 +9,7 @@ import json
 import os
 import re
 import threading
+from datetime import datetime
 import boto3
 from botocore.config import Config
 from config import AWS_REGION, NOTES_BASE_DIR, SANGHWA_NOTES_DIR, AYMAN_NOTES_DIR, RETRIEVAL_AGENT_ARN
@@ -432,8 +433,12 @@ def ask_notes_agent(
 
 RESEARCH_SYSTEM_PROMPT = (
     "You are an expert customer research analyst helping an AWS account manager "
-    "prepare for customer calls. You have a `web_search` tool — use it to find "
-    "current information. Run 2-3 targeted searches, then synthesize a brief.\n\n"
+    "prepare for customer calls. Today's date is {today}. You have a `web_search` "
+    "tool — use it to find current information. Run 2-3 targeted searches, then "
+    "synthesize a brief.\n\n"
+    "IMPORTANT: When searching, always include the current year ({year}) in your "
+    "queries to get the most recent results. For example, search for "
+    "'Pramata company news {year}' not just 'Pramata company news'.\n\n"
     "Structure your response with these sections:\n"
     "## 1. Business Overview\n"
     "Company description, products, industry, size, recent news.\n\n"
@@ -558,7 +563,10 @@ def ask_research_agent(
                 payload = {
                     "anthropic_version": "bedrock-2023-05-31",
                     "max_tokens": 8192,
-                    "system": RESEARCH_SYSTEM_PROMPT,
+                    "system": RESEARCH_SYSTEM_PROMPT.format(
+                        today=datetime.now().strftime("%B %d, %Y"),
+                        year=datetime.now().strftime("%Y"),
+                    ),
                     "messages": conversation_history,
                     "tools": [_WEB_SEARCH_TOOL],
                 }
