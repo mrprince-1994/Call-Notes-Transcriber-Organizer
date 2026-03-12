@@ -1054,19 +1054,42 @@ class NotesRetrieverTab:
         title = first_user[:80]
         customer = self.customer_filter_var.get()
         source = self.source_filter_var.get()
+
+        # Ensure conversation_history is JSON-serializable
+        # (strip any non-serializable content blocks)
+        clean_history = []
+        for msg in self._conversation_history:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                clean_history.append({"role": msg["role"], "content": content})
+            elif isinstance(content, list):
+                # Extract text blocks only, skip tool_use/tool_result blocks
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif "text" in block and "type" not in block:
+                            text_parts.append(block["text"])
+                if text_parts:
+                    clean_history.append({"role": msg["role"], "content": " ".join(text_parts)})
+            else:
+                clean_history.append({"role": msg["role"], "content": str(content)})
+
         try:
             ts = save_chat_session(
                 session_type=self._agent_mode,
                 title=title,
-                conversation_history=self._conversation_history,
+                conversation_history=clean_history,
                 customer=customer if customer != "(All)" else "",
                 source_filter=source if source != "All Sources" else "",
             )
             self._current_session_ts = ts
             # Refresh sidebar in background
             threading.Thread(target=self._load_session_history, daemon=True).start()
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            print(f"[session save error] {e}\n{traceback.format_exc()}")
 
     def _delete_selected_session(self):
         sel = self._sh_listbox.curselection()

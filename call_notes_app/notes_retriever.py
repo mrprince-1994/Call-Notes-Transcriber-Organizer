@@ -153,8 +153,12 @@ def _build_file_index(notes_meta: list[dict], question: str = "") -> list[dict]:
 def _invoke_agentcore(runtime_arn: str, payload: dict, on_chunk=None) -> str:
     """Call a deployed AgentCore agent via boto3 invoke_agent_runtime (HTTP).
 
-    The agent streams SSE events. Each line is `data: <json>\n\n`.
-    We parse text deltas from Strands stream events and forward them to on_chunk.
+    The agent streams SSE events. The format alternates between:
+      1. Bedrock events:  data: {"event": {"contentBlockDelta": {"delta": {"text": "..."}}}}
+      2. Strands repr:    data: "{'data': '...', 'agent': <strands...>}"  (skip these)
+
+    We extract text from the Bedrock contentBlockDelta events and tool names
+    from contentBlockStart events.
     """
     client = boto3.client("bedrock-agentcore", region_name=AWS_REGION)
     resp = client.invoke_agent_runtime(
@@ -167,7 +171,6 @@ def _invoke_agentcore(runtime_arn: str, payload: dict, on_chunk=None) -> str:
         body = body.read()
     raw = body.decode("utf-8") if isinstance(body, bytes) else body
 
-    # Parse SSE stream: lines like  data: {"data":"...","type":"..."}
     answer_parts = []
     for line in raw.split("\n"):
         line = line.strip()
@@ -176,38 +179,61 @@ def _invoke_agentcore(runtime_arn: str, payload: dict, on_chunk=None) -> str:
         json_str = line[5:].strip()
         if not json_str:
             continue
+
+        # Skip Strands repr strings (start with " and contain Python objects)
+        if json_str.startswith('"'):
+            continue
+
         try:
             event = json.loads(json_str)
         except json.JSONDecodeError:
             continue
 
-        # Strands stream events carry text in "data" key with type "text"
-        # Also handle plain {"text": "..."} or {"answer": "..."} for non-streaming fallback
-        text = ""
-        if isinstance(event, dict):
-            if event.get("type") == "text" and "data" in event:
-                text = event["data"]
-            elif event.get("type") == "tool_use":
-                # Tool call event — show as progress
-                tool_name = event.get("name", event.get("data", ""))
+        if not isinstance(event, dict):
+            continue
+
+        # Extract from Bedrock-style events: {"event": {...}}
+        inner = event.get("event")
+        if isinstance(inner, dict):
+            # Text delta: {"contentBlockDelta": {"delta": {"text": "..."}}}
+            cbd = inner.get("contentBlockDelta")
+            if cbd:
+                delta = cbd.get("delta", {})
+                text = delta.get("text", "")
+                if text:
+                    answer_parts.append(text)
+                    if on_chunk:
+                        on_chunk(text)
+                continue
+
+            # Tool start: {"contentBlockStart": {"start": {"toolUse": {"name": "..."}}}}
+            cbs = inner.get("contentBlockStart")
+            if cbs:
+                tool_info = cbs.get("start", {}).get("toolUse", {})
+                tool_name = tool_info.get("name", "")
                 if tool_name and on_chunk:
                     on_chunk(f"🔧 Using tool: {tool_name}\n")
                 continue
-            elif event.get("type") == "tool_result":
-                continue  # skip tool results
-            elif "text" in event:
-                text = event["text"]
-            elif "answer" in event:
-                text = event["answer"]
-            elif "result" in event:
-                text = event["result"]
 
-        if text:
+            # Skip messageStart, messageStop, contentBlockStop, metadata
+            continue
+
+        # Non-event top-level keys (init_event_loop, start, message, etc.) — skip
+        # But handle legacy non-streaming fallback: {"answer": "...", "status": "..."}
+        if "answer" in event:
+            text = event["answer"]
             answer_parts.append(text)
             if on_chunk:
                 on_chunk(text)
+        elif "result" in event:
+            text = str(event["result"])
+            # Skip AgentResult repr strings
+            if "AgentResult" not in text:
+                answer_parts.append(text)
+                if on_chunk:
+                    on_chunk(text)
 
-    # If no SSE events were parsed, treat the whole response as plain text/JSON
+    # If no events were parsed, treat the whole response as plain text/JSON
     if not answer_parts:
         try:
             data = json.loads(raw)
