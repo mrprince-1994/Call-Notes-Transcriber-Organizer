@@ -512,17 +512,10 @@ def ask_notes_agent(
 
             file_index = _build_file_index(notes_meta, question)
 
-            if RETRIEVAL_AGENT_ARN:
-                if on_chunk:
-                    on_chunk("🔍 Querying retrieval agent...\n")
-                payload = {"prompt": question, "file_index": file_index}
-                answer = _invoke_agentcore(RETRIEVAL_AGENT_ARN, payload, on_chunk=on_chunk)
-                # Keep history consistent for multi-turn
-                conversation_history.append({"role": "user", "content": question})
-                conversation_history.append({"role": "assistant", "content": answer})
-            else:
-                answer = _local_retrieval(question, file_index, conversation_history,
-                                          on_chunk=on_chunk)
+            # Always use local retrieval — files are on this machine,
+            # the AgentCore container can't access local paths.
+            answer = _local_retrieval(question, file_index, conversation_history,
+                                      on_chunk=on_chunk)
 
             if not answer.strip():
                 answer = "⚠️ No response generated. Try rephrasing your question."
