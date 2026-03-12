@@ -151,37 +151,22 @@ def _build_file_index(notes_meta: list[dict], question: str = "") -> list[dict]:
 # ── AgentCore invocation ───────────────────────────────────────────────────────
 
 def _invoke_agentcore(runtime_arn: str, payload: dict) -> str:
-    """Call a deployed AgentCore agent and return the answer text."""
-    import websocket as ws_lib
-    from bedrock_agentcore.runtime import AgentCoreRuntimeClient
-
-    client = AgentCoreRuntimeClient(region=AWS_REGION)
-    ws_url, headers = client.generate_ws_connection(
-        runtime_arn=runtime_arn,
-        endpoint_name="DEFAULT",
+    """Call a deployed AgentCore agent via boto3 invoke_agent_runtime (HTTP)."""
+    client = boto3.client("bedrock-agentcore", region_name=AWS_REGION)
+    resp = client.invoke_agent_runtime(
+        agentRuntimeArn=runtime_arn,
+        qualifier="DEFAULT",
+        payload=json.dumps(payload).encode("utf-8"),
     )
-    header_list = [f"{k}: {v}" for k, v in headers.items()]
-    ws = ws_lib.create_connection(ws_url, header=header_list, timeout=300)
-    parts = []
+    body = resp.get("response", b"")
+    if hasattr(body, "read"):
+        body = body.read()
+    raw = body.decode("utf-8") if isinstance(body, bytes) else body
     try:
-        ws.send(json.dumps(payload))
-        while True:
-            try:
-                raw = ws.recv()
-            except ws_lib.WebSocketConnectionClosedException:
-                break
-            if not raw:
-                break
-            try:
-                data = json.loads(raw)
-                text = data.get("answer", data.get("result", data.get("text", "")))
-                if text:
-                    parts.append(text)
-            except json.JSONDecodeError:
-                parts.append(raw)
-    finally:
-        ws.close()
-    return "".join(parts)
+        data = json.loads(raw)
+        return data.get("answer", data.get("result", data.get("text", raw)))
+    except json.JSONDecodeError:
+        return raw
 
 
 # ── Local fallback (direct Bedrock tool-use) ───────────────────────────────────
