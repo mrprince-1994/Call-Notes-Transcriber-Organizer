@@ -916,7 +916,7 @@ class NotesRetrieverTab:
                                           font=ctk.CTkFont("Segoe UI", 11, "bold"))
             self._retrieval_btn.configure(fg_color="transparent", text_color=FG_DIM,
                                            font=ctk.CTkFont("Segoe UI", 11))
-            self.model_label.configure(text="🌐 Customer Research  ·  Claude Sonnet 4.6  ·  Web Search")
+            self.model_label.configure(text="🌐 Customer Research  ·  Claude Sonnet 4  ·  Web Search")
             self.input_entry.configure(placeholder_text="Research a customer (e.g. 'What's new with BQE?')...")
         self._new_chat()
 

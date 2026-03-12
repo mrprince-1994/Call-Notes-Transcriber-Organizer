@@ -11,10 +11,10 @@ import re
 import threading
 import boto3
 from botocore.config import Config
-from config import AWS_REGION, NOTES_BASE_DIR, SANGHWA_NOTES_DIR, AYMAN_NOTES_DIR, RETRIEVAL_AGENT_ARN, RESEARCH_AGENT_ARN
+from config import AWS_REGION, NOTES_BASE_DIR, SANGHWA_NOTES_DIR, AYMAN_NOTES_DIR, RETRIEVAL_AGENT_ARN
 
 OPUS_MODEL_ID   = "us.anthropic.claude-opus-4-6-v1"
-SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"   # Sonnet 4 — faster, no thinking overhead
 
 NOTE_SOURCES = [
     (NOTES_BASE_DIR,    "My Notes"),
@@ -430,6 +430,86 @@ def ask_notes_agent(
     threading.Thread(target=_run, daemon=True).start()
 
 
+RESEARCH_SYSTEM_PROMPT = (
+    "You are an expert customer research analyst helping an AWS account manager "
+    "prepare for customer calls. You have a `web_search` tool — use it to find "
+    "current information. Run 2-3 targeted searches, then synthesize a brief.\n\n"
+    "Structure your response with these sections:\n"
+    "## 1. Business Overview\n"
+    "Company description, products, industry, size, recent news.\n\n"
+    "## 2. AI/ML Solutions in Production\n"
+    "Any AI/ML capabilities the company has shipped or announced. "
+    "If none found, state that clearly.\n\n"
+    "## 3. AI/ML Use Cases & Industry Success Stories\n"
+    "3-5 high-impact AI/ML use cases relevant to their industry, "
+    "referencing AWS services (Bedrock, SageMaker, Textract, etc.) "
+    "and real customer success stories where possible.\n\n"
+    "## 4. Recommended Talking Points\n"
+    "4-6 actionable conversation starters tied to business outcomes "
+    "and AWS capabilities. Include at least one about generative AI.\n\n"
+    "Cite sources with URLs. Be concise but thorough."
+)
+
+# ── Local web search (for research agent) ──────────────────────────────────────
+
+_WEB_SEARCH_TOOL = {
+    "name": "web_search",
+    "description": "Search the web using DuckDuckGo for current information about a company or topic.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query string"},
+        },
+        "required": ["query"],
+    },
+}
+
+
+def _execute_web_search(query: str) -> str:
+    """Run a DuckDuckGo search and return formatted results."""
+    import urllib.request
+    import urllib.parse
+
+    results = []
+    # Primary: duckduckgo-search package
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=5))
+    except Exception:
+        # Fallback: HTML scraper
+        try:
+            encoded = urllib.parse.quote_plus(query)
+            url = f"https://html.duckduckgo.com/html/?q={encoded}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
+                "Accept": "text/html",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                html = resp.read().decode("utf-8", errors="replace")
+            blocks = re.findall(r"result__body.*?(?=result__body|$)", html, re.DOTALL)
+            for block in blocks[:5]:
+                title_m = re.search(r'result__a[^>]*>(.*?)</a>', block, re.DOTALL)
+                snip_m = re.search(r'result__snippet[^>]*>(.*?)</span>', block, re.DOTALL)
+                title = re.sub(r"<[^>]+>", "", title_m.group(1)).strip() if title_m else ""
+                snip = re.sub(r"<[^>]+>", "", snip_m.group(1)).strip() if snip_m else ""
+                if title or snip:
+                    results.append({"title": title, "body": snip})
+        except Exception as e2:
+            return f"Search error: {e2}"
+
+    if not results:
+        return f"No results found for: {query}"
+
+    parts = []
+    for r in results:
+        title = r.get("title", "")
+        link = r.get("href", r.get("url", ""))
+        body = r.get("body", r.get("snippet", ""))
+        parts.append(f"**{title}**\n{link}\n{body}")
+    return f"Results for '{query}':\n\n" + "\n\n---\n\n".join(parts)
+
+
 def ask_research_agent(
     question: str,
     customer: str,
@@ -439,80 +519,105 @@ def ask_research_agent(
 ):
     """Ask the customer research agent (web search).
 
-    Uses the deployed AgentCore research agent if RESEARCH_AGENT_ARN is set,
-    otherwise falls back to direct Bedrock (no web search tools).
+    Always uses direct Bedrock streaming with local web_search tool
+    for real-time token-by-token output and lower latency.
     """
     def _run():
         try:
-            if RESEARCH_AGENT_ARN:
-                if on_chunk:
-                    on_chunk("🌐 Querying research agent...\n")
-                payload = {"prompt": question, "customer": customer}
-                answer = _invoke_agentcore(RESEARCH_AGENT_ARN, payload, on_chunk=on_chunk)
-                conversation_history.append({"role": "user", "content": question})
-                conversation_history.append({"role": "assistant", "content": answer})
+            # Build the user message
+            if not conversation_history:
+                user_content = question
+                if customer and customer.lower() not in question.lower():
+                    user_content = f"Research customer: {customer}\n\n{question}"
             else:
-                # Fallback: Bedrock without web search
-                if not conversation_history:
-                    user_content = (
-                        f"You are a customer research assistant. The customer is: {customer}\n\n"
-                        f"{question}\n\n"
-                        "(Note: web search tools are not available in this mode. "
-                        "Answer from your training knowledge and note any limitations.)"
-                    )
-                else:
-                    user_content = question
+                user_content = question
 
-                conversation_history.append({"role": "user", "content": user_content})
+            conversation_history.append({"role": "user", "content": user_content})
 
-                client = boto3.client("bedrock-runtime", region_name=AWS_REGION,
-                                      config=Config(read_timeout=120))
-                payload_body = {
+            client = boto3.client("bedrock-runtime", region_name=AWS_REGION,
+                                  config=Config(read_timeout=300))
+            answer_parts = []
+
+            for _ in range(6):  # max tool-use loops
+                payload = {
                     "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 4096,
-                    "system": (
-                        "You are an expert customer research analyst helping an AWS account manager. "
-                        "Produce a comprehensive business brief with these sections: "
-                        "1) Business Overview — what they do, products, industry, size, recent news; "
-                        "2) AI/ML Solutions in Production — any shipped AI/ML capabilities; "
-                        "3) AI/ML Use Cases & Industry Success Stories — 3-5 high-impact use cases "
-                        "similar companies have deployed, with specific AWS services; "
-                        "4) Recommended Talking Points — 4-6 actionable conversation starters "
-                        "tied to business outcomes and AWS capabilities. "
-                        "Note: web search tools are not available in this mode. "
-                        "Answer from your training knowledge and note any limitations."
-                    ),
+                    "max_tokens": 8192,
+                    "system": RESEARCH_SYSTEM_PROMPT,
                     "messages": conversation_history,
+                    "tools": [_WEB_SEARCH_TOOL],
                 }
                 resp = client.invoke_model_with_response_stream(
                     modelId=SONNET_MODEL_ID,
                     contentType="application/json",
                     accept="application/json",
-                    body=json.dumps(payload_body),
+                    body=json.dumps(payload),
                 )
-                parts = []
+
+                blocks, cur = [], None
                 for event in resp["body"]:
                     chunk = json.loads(event["chunk"]["bytes"])
-                    if chunk.get("type") == "content_block_delta":
-                        txt = chunk["delta"].get("text", "")
-                        if txt:
-                            parts.append(txt)
-                            if on_chunk: on_chunk(txt)
-                answer = "".join(parts)
-                conversation_history.append({"role": "assistant", "content": answer})
+                    t = chunk.get("type")
+                    if t == "content_block_start":
+                        cur = {**chunk.get("content_block", {}), "_tp": [], "_ip": []}
+                    elif t == "content_block_delta":
+                        d = chunk.get("delta", {})
+                        if d.get("type") == "text_delta":
+                            txt = d.get("text", "")
+                            if txt:
+                                cur["_tp"].append(txt)
+                                answer_parts.append(txt)
+                                if on_chunk:
+                                    on_chunk(txt)
+                        elif d.get("type") == "input_json_delta":
+                            cur["_ip"].append(d.get("partial_json", ""))
+                    elif t == "content_block_stop" and cur:
+                        if cur.get("type") == "text":
+                            cur["text"] = "".join(cur["_tp"])
+                        elif cur.get("type") == "tool_use":
+                            raw_input = "".join(cur["_ip"])
+                            cur["input"] = json.loads(raw_input) if raw_input.strip() else {}
+                        cur.pop("_tp", None)
+                        cur.pop("_ip", None)
+                        blocks.append(cur)
+                        cur = None
 
+                conversation_history.append({"role": "assistant", "content": blocks})
+
+                tool_blocks = [b for b in blocks if b.get("type") == "tool_use"]
+                if not tool_blocks:
+                    break
+
+                tool_results = []
+                for tb in tool_blocks:
+                    query = tb.get("input", {}).get("query", "")
+                    if on_chunk:
+                        on_chunk(f"🔍 Searching: {query}\n")
+                    result = _execute_web_search(query)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tb["id"],
+                        "content": result,
+                    })
+
+                conversation_history.append({"role": "user", "content": tool_results})
+
+            answer = "".join(answer_parts)
             if not answer.strip():
                 answer = "⚠️ No response generated."
-                if on_chunk: on_chunk(answer)
+                if on_chunk:
+                    on_chunk(answer)
 
-            if callback: callback(answer, None)
+            if callback:
+                callback(answer, None)
 
         except Exception as e:
             if conversation_history and conversation_history[-1]["role"] == "user":
                 conversation_history.pop()
             import traceback
             err = f"Error: {e}\n\n```\n{traceback.format_exc()}\n```"
-            if on_chunk: on_chunk(err)
-            if callback: callback(None, str(e))
+            if on_chunk:
+                on_chunk(err)
+            if callback:
+                callback(None, str(e))
 
     threading.Thread(target=_run, daemon=True).start()
