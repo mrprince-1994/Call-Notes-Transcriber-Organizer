@@ -143,17 +143,51 @@ If you run into an access error when generating notes, check that your IAM user 
 
 ## Step 9: Update config.py for Your Machine
 
-Open `call_notes_app/config.py` in any text editor and update these values:
+Open `call_notes_app/config.py` in any text editor. You need to update several values:
+
+### Required changes
 
 ```python
-# Set to your AWS region (must match where you enabled Bedrock)
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-
-# Change this to wherever you want notes saved on YOUR machine
+# Change this to wherever you want notes saved on YOUR machine.
+# The app will create the folder automatically if it doesn't exist.
 NOTES_BASE_DIR = r"C:\Users\YourName\Documents\Call Notes"
 ```
 
-**You must change `NOTES_BASE_DIR`** to a folder path on your computer. The app will create it automatically if it doesn't exist.
+### Optional: Teammate note directories
+
+The Notes Retrieval tab can index call notes from shared team folders. If you don't have these, set them to empty strings:
+
+```python
+SANGHWA_NOTES_DIR = ""
+AYMAN_NOTES_DIR   = ""
+```
+
+If you do have shared note folders, set them to the full path:
+
+```python
+SANGHWA_NOTES_DIR = r"C:\Users\YourName\path\to\shared\notes"
+AYMAN_NOTES_DIR   = r"C:\Users\YourName\path\to\other\notes"
+```
+
+### Optional: AgentCore Runtime ARNs
+
+If you're not deploying the AI Q&A agent to AgentCore (see Step 14), set these to `None`:
+
+```python
+AGENTCORE_RUNTIME_ARN = None
+RETRIEVAL_AGENT_ARN   = None
+RESEARCH_AGENT_ARN    = None
+```
+
+The app will fall back to local agent mode or direct Bedrock calls automatically.
+
+### AWS Region
+
+If you're using a region other than `us-east-1`, update:
+
+```python
+AWS_REGION = os.environ.get("AWS_REGION", "your-region-here")
+```
 
 ---
 

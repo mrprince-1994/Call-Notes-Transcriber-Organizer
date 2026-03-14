@@ -76,7 +76,7 @@ Note the `agentRuntimeArn` — you'll need it for the desktop app integration.
 
 In `call_notes_app/agent_client.py`, set the runtime ARN:
 ```python
-AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:ACCOUNT_ID:runtime/AGENT_ID"
+AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:YOUR_ACCOUNT_ID:runtime/YOUR_AGENT_ID"
 ```
 
 The client connects via WebSocket with SigV4 auth using your local AWS credentials.

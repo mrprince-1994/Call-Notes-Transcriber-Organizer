@@ -52,9 +52,14 @@ def save_chat_session(
     conversation_history: list, # list of {"role": ..., "content": ...}
     customer: str = "",
     source_filter: str = "",
+    existing_timestamp: str = None,
 ) -> str:
-    """Persist a chat session. Returns the timestamp key."""
-    ts = datetime.now().isoformat()
+    """Persist a chat session. Returns the timestamp key.
+
+    If existing_timestamp is provided, updates the existing record in place.
+    Otherwise creates a new record.
+    """
+    ts = existing_timestamp or datetime.now().isoformat()
     _table.put_item(Item={
         "session_type":   session_type,
         "timestamp":      ts,

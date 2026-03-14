@@ -118,12 +118,14 @@ python app.py
 Notes are saved to:
 
 ```
-C:\Users\mrprince\Desktop\AWS\Generative AI\SMB West\Call Notes\
+<your NOTES_BASE_DIR path>\
   └── {Customer Name}\
-      ├── {Customer Name}_notes_1_2026-03-09_14-30.docx
-      ├── {Customer Name}_notes_2_2026-03-15_10-00.docx
+      ├── {Customer Name}_notes_1_2026-03-09_14-30.md
+      ├── {Customer Name}_notes_2_2026-03-15_10-00.md
       └── ...
 ```
+
+The default path is set in `config.py` — see the Configuration section below to set your own.
 
 - A new folder is created per customer if one doesn't exist
 - Files are numbered sequentially and timestamped
@@ -148,14 +150,19 @@ Claude generates comprehensive notes with the following sections:
 
 ## Configuration
 
-All settings are in `config.py`:
+All settings are in `config.py`. You must update the paths to match your machine:
 
 | Setting | Default | Description |
 |---|---|---|
 | `AWS_REGION` | `us-east-1` | AWS region for Transcribe and Bedrock |
 | `SAMPLE_RATE` | `16000` | Audio sample rate (16kHz for Transcribe) |
-| `NOTES_BASE_DIR` | `C:\Users\mrprince\Desktop\...\Call Notes` | Root folder for saved notes |
+| `NOTES_BASE_DIR` | *(author's local path)* | **Change this** to where you want notes saved, e.g. `r"C:\Users\YourName\Documents\Call Notes"` |
+| `SANGHWA_NOTES_DIR` | *(author's local path)* | Optional: path to a teammate's notes folder for the Retrieval tab. Set to `""` if not needed |
+| `AYMAN_NOTES_DIR` | *(author's local path)* | Optional: path to another teammate's notes folder. Set to `""` if not needed |
 | `CLAUDE_MODEL_ID` | `us.anthropic.claude-sonnet-4-6` | Bedrock model ID for note generation |
+| `AGENTCORE_RUNTIME_ARN` | *(author's ARN)* | Set to your own AgentCore ARN after deploying, or set to `None` for local agent mode |
+| `RETRIEVAL_AGENT_ARN` | *(author's ARN)* | Set to your own ARN, or `None` for local mode |
+| `RESEARCH_AGENT_ARN` | *(author's ARN)* | Set to your own ARN, or `None` for local mode |
 
 ---
 
