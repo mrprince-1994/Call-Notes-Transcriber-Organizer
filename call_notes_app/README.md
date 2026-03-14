@@ -170,23 +170,32 @@ All settings are in `config.py`. You must update the paths to match your machine
 
 ```
 call_notes_app/
-├── app.py                # Tkinter GUI — device selection, recording controls, display
-├── transcriber.py        # Audio capture + Amazon Transcribe Streaming integration
-├── summarizer.py         # Sends transcript to Claude on Bedrock for note generation
-├── storage.py            # Converts markdown notes to .docx and saves to customer folder
-├── question_detector.py  # Detects AWS-related questions in the transcript
-├── agent_client.py       # Invokes the AI Q&A agent (AgentCore, local MCP, or Bedrock fallback)
-├── history.py            # Conversation history management
-├── md_render.py          # Markdown rendering for the UI
-├── config.py             # All configurable settings
-├── requirements.txt      # Python dependencies
-├── README.md             # This file
-├── SETUP.md              # Step-by-step setup guide
-├── AUDIO_SETUP_GUIDE.md  # Detailed audio device configuration guide
-└── agentcore_agent/      # Deployable AgentCore agent
-    ├── agent.py          # Strands Agent with MCP tools for AWS doc search
-    ├── requirements.txt  # Agent-specific dependencies
-    └── README.md         # Agent deployment guide
+├── app.py                        # Main entry point — all tab UIs (Tkinter/CTk)
+├── config.py                     # All configurable settings (paths, model IDs, ARNs)
+├── md_render.py                  # Shared markdown-to-Tkinter renderer
+├── requirements.txt              # Python dependencies
+├── README.md                     # This file
+├── SETUP.md                      # Step-by-step setup guide
+├── AUDIO_SETUP_GUIDE.md          # Detailed audio device configuration guide
+│
+├── transcription/                # Tab 1: Live Transcription
+│   ├── transcriber.py            # Audio capture + Amazon Transcribe Streaming
+│   ├── summarizer.py             # Claude on Bedrock for notes + follow-up email
+│   ├── storage.py                # Markdown-to-DOCX conversion and file saving
+│   ├── history.py                # DynamoDB session persistence for call notes
+│   ├── question_detector.py      # Detects AWS-related questions in transcript
+│   └── agent_client.py           # AI Q&A agent (AgentCore / local MCP / Bedrock)
+│
+├── retrieval/                    # Tab 2: Notes Retrieval & Tab 3: Customer Research
+│   ├── notes_retriever.py        # Historical notes indexing and retrieval agent
+│   └── chat_history.py           # DynamoDB chat session persistence
+│
+└── agentcore_agent/              # Deployable AgentCore agents
+    ├── agent.py                  # Strands Agent with MCP tools for AWS doc search
+    ├── requirements.txt          # Agent-specific dependencies
+    ├── README.md                 # Agent deployment guide
+    ├── research_agent/           # Customer research agent
+    └── retrieval_agent/          # Notes retrieval agent
 ```
 
 ---

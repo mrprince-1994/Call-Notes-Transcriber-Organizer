@@ -2,15 +2,15 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
 import threading
-from transcriber import LiveTranscriber
-from summarizer import generate_notes, generate_followup_email
-from storage import save_notes, _md_to_docx
-from history import save_session, list_sessions, get_all_customers
-from question_detector import is_aws_aiml_question, extract_question
-from agent_client import ask_agent, warmup as warmup_agent, shutdown as shutdown_agent
+from transcription.transcriber import LiveTranscriber
+from transcription.summarizer import generate_notes, generate_followup_email
+from transcription.storage import save_notes, _md_to_docx
+from transcription.history import save_session, list_sessions, get_all_customers
+from transcription.question_detector import is_aws_aiml_question, extract_question
+from transcription.agent_client import ask_agent, warmup as warmup_agent, shutdown as shutdown_agent
 from md_render import configure_tags, MarkdownStreamer
-from notes_retriever import scan_notes, ask_notes_agent, ask_research_agent, NOTE_SOURCES, dedupe_customers
-from chat_history import save_chat_session, list_chat_sessions, load_chat_session, delete_chat_session, _ensure_table
+from retrieval.notes_retriever import scan_notes, ask_notes_agent, ask_research_agent, NOTE_SOURCES, dedupe_customers
+from retrieval.chat_history import save_chat_session, list_chat_sessions, load_chat_session, delete_chat_session, _ensure_table
 
 # --- Color Palette (monochrome) ---
 BG_DARK = "#0a0a0a"
@@ -267,6 +267,13 @@ class CallNotesApp:
             border_width=1, border_color=BORDER, state=tk.DISABLED,
             command=self._copy_email)
         self.copy_email_btn.pack(side=tk.RIGHT)
+        self.outlook_draft_btn = ctk.CTkButton(
+            email_header, text="📨 Outlook Draft", width=120, height=28,
+            fg_color=BG_INPUT, hover_color=BG_CARD, text_color=FG_TEXT,
+            font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
+            border_width=1, border_color=BORDER, state=tk.DISABLED,
+            command=self._send_to_outlook_draft)
+        self.outlook_draft_btn.pack(side=tk.RIGHT, padx=(0, 6))
         self.email_text = StyledText(card, height=6, font=("Segoe UI", 10))
         self.email_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
@@ -449,6 +456,7 @@ class CallNotesApp:
         self.export_pdf_btn.configure(state=tk.NORMAL)
         self.copy_transcript_btn.configure(state=tk.NORMAL if self._current_transcript else tk.DISABLED)
         self.copy_email_btn.configure(state=tk.NORMAL if self._current_email else tk.DISABLED)
+        self.outlook_draft_btn.configure(state=tk.NORMAL if self._current_email else tk.DISABLED)
         self.status_var.set(f"Loaded session from {item['timestamp'][:16]}")
 
     # ─────────────────────────── EXPORT ───────────────────────────
@@ -469,6 +477,42 @@ class CallNotesApp:
         self.root.clipboard_clear()
         self.root.clipboard_append(clean)
         self.status_var.set("📋 Email copied to clipboard!")
+
+    def _send_to_outlook_draft(self):
+        email = self._current_email.strip()
+        if not email:
+            messagebox.showinfo("Nothing to send", "No follow-up email generated yet.")
+            return
+        # Strip markdown
+        import re
+        clean = re.sub(r'\*\*(.+?)\*\*', r'\1', email)
+        clean = re.sub(r'__(.+?)__', r'\1', clean)
+        clean = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', clean)
+        clean = re.sub(r'(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', r'\1', clean)
+        clean = re.sub(r'^#{1,6}\s+', '', clean, flags=re.MULTILINE)
+        clean = re.sub(r'`(.+?)`', r'\1', clean)
+
+        # Parse subject line if present
+        lines = clean.split("\n", 2)
+        subject = ""
+        body = clean
+        if lines[0].lower().startswith("subject:"):
+            subject = lines[0].split(":", 1)[1].strip()
+            body = "\n".join(lines[1:]).strip()
+
+        try:
+            import win32com.client
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mail = outlook.CreateItem(0)  # 0 = olMailItem
+            mail.Subject = subject
+            mail.Body = body
+            mail.Save()  # Saves to Drafts
+            self.status_var.set("📨 Email saved to Outlook Drafts!")
+        except ImportError:
+            messagebox.showerror("Missing Library",
+                                 "Install pywin32: python -m pip install pywin32")
+        except Exception as e:
+            messagebox.showerror("Outlook Error", f"Could not create draft:\n{e}")
 
     def _copy_transcript(self):
         transcript = self._current_transcript.strip()
@@ -613,6 +657,7 @@ class CallNotesApp:
         self.export_docx_btn.configure(state=tk.DISABLED)
         self.export_pdf_btn.configure(state=tk.DISABLED)
         self.copy_email_btn.configure(state=tk.DISABLED)
+        self.outlook_draft_btn.configure(state=tk.DISABLED)
         self.copy_transcript_btn.configure(state=tk.DISABLED)
 
         self.transcriber = LiveTranscriber(
@@ -704,6 +749,8 @@ class CallNotesApp:
         self.root.after(0, lambda: self.export_pdf_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.copy_transcript_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.copy_email_btn.configure(
+            state=tk.NORMAL if results["email"] else tk.DISABLED))
+        self.root.after(0, lambda: self.outlook_draft_btn.configure(
             state=tk.NORMAL if results["email"] else tk.DISABLED))
         self.root.after(0, self._refresh_history)
 
@@ -1231,7 +1278,7 @@ class NotesRetrieverTab:
         raw_names = list({n["customer"] for n in all_notes})
 
         # Fuzzy-deduplicate: 'Common Chain' and 'Common Chains' → one entry
-        from notes_retriever import dedupe_customers, _is_likely_customer
+        from retrieval.notes_retriever import dedupe_customers, _is_likely_customer
         canonical_map = dedupe_customers(raw_names)
 
         # Store the mapping so _get_active_notes can match against canonical names
