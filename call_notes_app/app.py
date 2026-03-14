@@ -260,20 +260,13 @@ class CallNotesApp:
         ctk.CTkLabel(email_header, text="📧  Follow-Up Email",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"),
                      text_color=ACCENT).pack(side=tk.LEFT)
-        self.copy_email_btn = ctk.CTkButton(
-            email_header, text="📋 Copy to Clipboard", width=140, height=28,
-            fg_color=BG_INPUT, hover_color=BG_CARD, text_color=FG_TEXT,
-            font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
-            border_width=1, border_color=BORDER, state=tk.DISABLED,
-            command=self._copy_email)
-        self.copy_email_btn.pack(side=tk.RIGHT)
         self.outlook_draft_btn = ctk.CTkButton(
             email_header, text="📨 Outlook Draft", width=120, height=28,
             fg_color=BG_INPUT, hover_color=BG_CARD, text_color=FG_TEXT,
             font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
             border_width=1, border_color=BORDER, state=tk.DISABLED,
             command=self._send_to_outlook_draft)
-        self.outlook_draft_btn.pack(side=tk.RIGHT, padx=(0, 6))
+        self.outlook_draft_btn.pack(side=tk.RIGHT)
         self.email_text = StyledText(card, height=6, font=("Segoe UI", 10))
         self.email_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
@@ -455,28 +448,10 @@ class CallNotesApp:
         self.export_docx_btn.configure(state=tk.NORMAL)
         self.export_pdf_btn.configure(state=tk.NORMAL)
         self.copy_transcript_btn.configure(state=tk.NORMAL if self._current_transcript else tk.DISABLED)
-        self.copy_email_btn.configure(state=tk.NORMAL if self._current_email else tk.DISABLED)
         self.outlook_draft_btn.configure(state=tk.NORMAL if self._current_email else tk.DISABLED)
         self.status_var.set(f"Loaded session from {item['timestamp'][:16]}")
 
     # ─────────────────────────── EXPORT ───────────────────────────
-
-    def _copy_email(self):
-        email = self._current_email.strip()
-        if not email:
-            messagebox.showinfo("Nothing to copy", "No follow-up email generated yet.")
-            return
-        # Strip any residual markdown formatting for clean Outlook paste
-        import re
-        clean = re.sub(r'\*\*(.+?)\*\*', r'\1', email)   # **bold**
-        clean = re.sub(r'__(.+?)__', r'\1', clean)        # __bold__
-        clean = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', clean)  # *italic*
-        clean = re.sub(r'(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', r'\1', clean)       # _italic_
-        clean = re.sub(r'^#{1,6}\s+', '', clean, flags=re.MULTILINE)  # ## headers
-        clean = re.sub(r'`(.+?)`', r'\1', clean)          # `code`
-        self.root.clipboard_clear()
-        self.root.clipboard_append(clean)
-        self.status_var.set("📋 Email copied to clipboard!")
 
     def _send_to_outlook_draft(self):
         email = self._current_email.strip()
@@ -656,7 +631,6 @@ class CallNotesApp:
         self._pending_questions.clear()
         self.export_docx_btn.configure(state=tk.DISABLED)
         self.export_pdf_btn.configure(state=tk.DISABLED)
-        self.copy_email_btn.configure(state=tk.DISABLED)
         self.outlook_draft_btn.configure(state=tk.DISABLED)
         self.copy_transcript_btn.configure(state=tk.DISABLED)
 
@@ -748,8 +722,6 @@ class CallNotesApp:
         self.root.after(0, lambda: self.export_docx_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.export_pdf_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.copy_transcript_btn.configure(state=tk.NORMAL))
-        self.root.after(0, lambda: self.copy_email_btn.configure(
-            state=tk.NORMAL if results["email"] else tk.DISABLED))
         self.root.after(0, lambda: self.outlook_draft_btn.configure(
             state=tk.NORMAL if results["email"] else tk.DISABLED))
         self.root.after(0, self._refresh_history)
