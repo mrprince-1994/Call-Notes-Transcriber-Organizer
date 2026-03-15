@@ -4,9 +4,10 @@ from tkinter import messagebox, filedialog
 import customtkinter as ctk
 import threading
 from transcription.transcriber import LiveTranscriber
-from transcription.summarizer import generate_notes, generate_followup_email, generate_prep_summary
+from transcription.summarizer import generate_notes, generate_followup_email, generate_prep_summary, extract_competitors
 from transcription.storage import save_notes, _md_to_docx
 from transcription.history import save_session, list_sessions, get_all_customers
+from transcription.competitive_intel import save_competitor_mentions
 from transcription.question_detector import is_aws_aiml_question, extract_question
 from transcription.agent_client import ask_agent, warmup as warmup_agent, shutdown as shutdown_agent
 from md_render import configure_tags, MarkdownStreamer
@@ -786,6 +787,16 @@ class CallNotesApp:
         if results["email_error"]:
             self.root.after(0, lambda: self.status_var.set(
                 f"Notes saved but email failed: {results['email_error']}"))
+
+        # Extract competitor mentions in background (non-blocking)
+        if results["notes"]:
+            try:
+                mentions = extract_competitors(results["notes"], customer)
+                if mentions:
+                    save_competitor_mentions(customer, mentions)
+                    print(f"[competitive intel] Saved {len(mentions)} competitor mention(s)")
+            except Exception as e:
+                print(f"[competitive intel] Error: {e}")
 
     def _prepare_notes_for_streaming(self):
         self.notes_text.config(state=tk.NORMAL)

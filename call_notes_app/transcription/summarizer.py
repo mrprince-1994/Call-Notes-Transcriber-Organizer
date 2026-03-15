@@ -255,3 +255,63 @@ def generate_prep_summary(notes_list: list, customer_name: str, on_chunk=None) -
                     on_chunk(text)
 
     return "".join(full_text)
+
+COMPETITOR_EXTRACT_PROMPT = """You are a competitive intelligence analyst. Given meeting notes from a customer call,
+extract any mentions of competitors, competing products, or alternative solutions the customer is evaluating or using.
+
+Return ONLY valid JSON — an array of objects. If no competitors are mentioned, return an empty array [].
+
+Each object should have:
+{
+  "competitor": "Company or product name",
+  "context": "What was said about them — 1-2 sentences capturing the key point",
+  "sentiment": "positive | negative | neutral — how the customer feels about this competitor"
+}
+
+Examples of what to look for:
+- "They're currently using Snowflake for their data warehouse"
+- "They evaluated Databricks but found it too expensive"
+- "Their team prefers Azure over AWS for this workload"
+- "They mentioned Google's Vertex AI as an alternative"
+- "They use Tableau for dashboards but want something more interactive"
+
+Do NOT include AWS services as competitors. Only extract non-AWS companies/products."""
+
+
+def extract_competitors(notes: str, customer_name: str) -> list:
+    """Extract competitor mentions from call notes. Returns list of dicts."""
+    client = boto3.client(
+        "bedrock-runtime", region_name=AWS_REGION,
+        config=Config(read_timeout=120),
+    )
+
+    payload = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 2048,
+        "system": COMPETITOR_EXTRACT_PROMPT,
+        "messages": [{
+            "role": "user",
+            "content": f"Customer: {customer_name}\n\nMeeting Notes:\n{notes}",
+        }],
+    }
+
+    try:
+        response = client.invoke_model(
+            modelId=CLAUDE_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(payload),
+        )
+        result = json.loads(response["body"].read())
+        text = result["content"][0]["text"]
+
+        # Extract JSON array
+        import re
+        start = text.find('[')
+        end = text.rfind(']') + 1
+        if start >= 0 and end > start:
+            return json.loads(text[start:end])
+    except Exception as e:
+        print(f"[competitor extract] Error: {e}")
+
+    return []
