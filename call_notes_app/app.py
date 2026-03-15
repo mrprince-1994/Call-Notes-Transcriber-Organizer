@@ -2257,30 +2257,36 @@ class InsightsTab:
         self._stats_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self._stats_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
 
-        # Charts area
+        # Main body: charts left, trends right
         body = ctk.CTkFrame(parent, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
+        body.columnconfigure(0, weight=3)   # charts take more space
+        body.columnconfigure(1, weight=2)   # trend panel
         body.rowconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
 
-        # 4 chart slots in a 2x2 grid
+        # Left: 2x2 chart grid
+        charts_frame = ctk.CTkFrame(body, fg_color="transparent")
+        charts_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        charts_frame.columnconfigure(0, weight=1)
+        charts_frame.columnconfigure(1, weight=1)
+        charts_frame.rowconfigure(0, weight=1)
+        charts_frame.rowconfigure(1, weight=1)
+
         self._chart_frames = []
         for r in range(2):
             for c in range(2):
-                frame = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=12,
+                frame = ctk.CTkFrame(charts_frame, fg_color=BG_PANEL, corner_radius=12,
                                       border_width=1, border_color=BORDER)
                 frame.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
                 self._chart_frames.append(frame)
 
-        # Trend Generation panel
-        trend_panel = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+        # Right: Trend Generation panel (full height)
+        trend_panel = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=12,
                                     border_width=1, border_color=BORDER)
-        trend_panel.pack(fill=tk.X, padx=16, pady=(0, 12))
+        trend_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
         trend_header = ctk.CTkFrame(trend_panel, fg_color="transparent")
-        trend_header.pack(fill=tk.X, padx=14, pady=(10, 6))
+        trend_header.pack(fill=tk.X, padx=14, pady=(12, 8))
         ctk.CTkLabel(trend_header, text="🔮  Trend Generation",
                      font=ctk.CTkFont("Segoe UI", 13, "bold"),
                      text_color=ACCENT).pack(side=tk.LEFT)
@@ -2291,8 +2297,8 @@ class InsightsTab:
             command=self._generate_trends)
         self._trend_btn.pack(side=tk.RIGHT)
 
-        self._trend_text = StyledText(trend_panel, height=6, font=("Segoe UI", 10))
-        self._trend_text.pack(fill=tk.X, padx=12, pady=(0, 12))
+        self._trend_text = StyledText(trend_panel, font=("Segoe UI", 10))
+        self._trend_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
 
     def _make_stat_card(self, parent, label, value, color=ACCENT):
         card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=10,
@@ -2489,12 +2495,14 @@ Do NOT use markdown formatting. Use plain text with dashes for bullets."""
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
 
-        # Dark theme for matplotlib
+        # Dark theme for matplotlib — bold white text for legibility
         chart_bg = "#171717"
-        chart_fg = "#d1d5db"
+        chart_fg = "#ffffff"
         accent = "#10a37f"
         accent2 = "#6ee7b7"
         red_color = "#ef4444"
+        label_size = 9
+        title_size = 12
 
         # Clear stat cards
         for w in self._stats_frame.winfo_children():
