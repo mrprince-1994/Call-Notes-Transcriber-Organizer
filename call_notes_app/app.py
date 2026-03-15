@@ -2236,7 +2236,7 @@ class InsightsTab:
         top = ctk.CTkFrame(parent, fg_color="transparent")
         top.pack(fill=tk.X, padx=16, pady=(14, 6))
 
-        ctk.CTkLabel(top, text="📊  Insights",
+        ctk.CTkLabel(top, text="📊  Trends & Insights",
                      font=ctk.CTkFont("Segoe UI", 15, "bold"),
                      text_color=FG_BRIGHT).pack(side=tk.LEFT)
 
@@ -2257,9 +2257,9 @@ class InsightsTab:
         self._stats_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self._stats_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
 
-        # Charts area — scrollable
+        # Charts area
         body = ctk.CTkFrame(parent, fg_color="transparent")
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
@@ -2274,6 +2274,26 @@ class InsightsTab:
                 frame.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
                 self._chart_frames.append(frame)
 
+        # Trend Generation panel
+        trend_panel = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+                                    border_width=1, border_color=BORDER)
+        trend_panel.pack(fill=tk.X, padx=16, pady=(0, 12))
+
+        trend_header = ctk.CTkFrame(trend_panel, fg_color="transparent")
+        trend_header.pack(fill=tk.X, padx=14, pady=(10, 6))
+        ctk.CTkLabel(trend_header, text="🔮  Trend Generation",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=ACCENT).pack(side=tk.LEFT)
+        self._trend_btn = ctk.CTkButton(
+            trend_header, text="Generate Trends", width=130, height=30,
+            fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG_DARK,
+            font=ctk.CTkFont("Segoe UI", 11, "bold"), corner_radius=6,
+            command=self._generate_trends)
+        self._trend_btn.pack(side=tk.RIGHT)
+
+        self._trend_text = StyledText(trend_panel, height=6, font=("Segoe UI", 10))
+        self._trend_text.pack(fill=tk.X, padx=12, pady=(0, 12))
+
     def _make_stat_card(self, parent, label, value, color=ACCENT):
         card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=10,
                              border_width=1, border_color=BORDER, width=160, height=70)
@@ -2283,6 +2303,136 @@ class InsightsTab:
                      text_color=color).pack(padx=12, pady=(10, 0))
         ctk.CTkLabel(card, text=label, font=ctk.CTkFont("Segoe UI", 10),
                      text_color=FG_DIM).pack(padx=12, pady=(0, 8))
+
+    def _generate_trends(self):
+        self._trend_btn.configure(state=tk.DISABLED, text="⏳ Analyzing...")
+        self._trend_text.config(state=tk.NORMAL)
+        self._trend_text.delete("1.0", tk.END)
+        self._trend_text.insert(tk.END, "Scanning call history and note files...\n")
+        self._trend_text.config(state=tk.DISABLED)
+
+        def run():
+            try:
+                from transcription.history import list_sessions
+                from retrieval.notes_retriever import scan_notes
+                import json
+                import boto3
+                from botocore.config import Config
+                from config import AWS_REGION, CLAUDE_MODEL_ID
+
+                # Gather data from DynamoDB sessions
+                sessions = list_sessions()
+                session_summaries = []
+                for s in sessions[:30]:  # last 30 sessions
+                    customer = s.get("customer_name", "Unknown")
+                    notes = s.get("notes", "")[:2000]
+                    ts = s.get("timestamp", "")[:10]
+                    if notes:
+                        session_summaries.append(f"[{customer} — {ts}]\n{notes}")
+
+                # Gather data from local note files
+                all_notes = scan_notes()
+                file_summaries = []
+                for note in all_notes[:20]:
+                    fpath = note.get("filepath", "")
+                    if fpath and os.path.exists(fpath):
+                        try:
+                            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                                content = f.read()[:2000]
+                            customer = note.get("customer", "Unknown")
+                            file_summaries.append(f"[{customer} — file]\n{content}")
+                        except Exception:
+                            pass
+
+                combined = "\n\n---\n\n".join(session_summaries + file_summaries[:10])
+
+                self._parent.after(0, lambda: self._trend_update_status(
+                    "Analyzing patterns across all calls..."))
+
+                # Send to Claude for trend analysis
+                client = boto3.client(
+                    "bedrock-runtime", region_name=AWS_REGION,
+                    config=Config(read_timeout=300),
+                )
+
+                prompt = """You are a sales intelligence analyst. Given notes from multiple customer calls,
+identify 5-10 cross-cutting trends, patterns, or themes that appear across multiple conversations.
+
+Focus on:
+- Common customer pain points or challenges
+- Recurring technology needs or interests
+- Frequently mentioned competitors or alternatives
+- Shared business priorities or strategic themes
+- Common objections or concerns
+- Emerging opportunities or market shifts
+
+For each trend, write:
+- A short bold title (5-8 words)
+- 1-2 sentences explaining the trend with specific examples from the calls
+- How many calls/customers this appeared in (approximate)
+
+Keep it actionable — these should help a sales team prioritize and prepare.
+Do NOT use markdown formatting. Use plain text with dashes for bullets."""
+
+                payload = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4096,
+                    "system": prompt,
+                    "messages": [{"role": "user", "content": f"Analyze these call notes for trends:\n\n{combined}"}],
+                }
+
+                self._trend_streaming_started = False
+                self._trend_md_streamer = MarkdownStreamer(self._trend_text)
+
+                response = client.invoke_model_with_response_stream(
+                    modelId=CLAUDE_MODEL_ID,
+                    contentType="application/json",
+                    accept="application/json",
+                    body=json.dumps(payload),
+                )
+
+                for event in response["body"]:
+                    chunk = json.loads(event["chunk"]["bytes"])
+                    if chunk.get("type") == "content_block_delta":
+                        text = chunk["delta"].get("text", "")
+                        if text:
+                            self._parent.after(0, self._trend_append, text)
+
+                self._parent.after(0, self._trend_finish)
+
+            except Exception as e:
+                self._parent.after(0, lambda: self._trend_error(str(e)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _trend_update_status(self, msg):
+        self._trend_text.config(state=tk.NORMAL)
+        self._trend_text.delete("1.0", tk.END)
+        self._trend_text.insert(tk.END, f"⏳ {msg}\n")
+        self._trend_text.config(state=tk.DISABLED)
+
+    def _trend_append(self, text):
+        self._trend_text.config(state=tk.NORMAL)
+        if not self._trend_streaming_started:
+            self._trend_streaming_started = True
+            self._trend_text.delete("1.0", tk.END)
+        self._trend_md_streamer.feed(text)
+        self._trend_text.see(tk.END)
+        self._trend_text.config(state=tk.DISABLED)
+
+    def _trend_finish(self):
+        self._trend_text.config(state=tk.NORMAL)
+        if hasattr(self, '_trend_md_streamer'):
+            self._trend_md_streamer.flush()
+        self._trend_text.see(tk.END)
+        self._trend_text.config(state=tk.DISABLED)
+        self._trend_btn.configure(state=tk.NORMAL, text="Generate Trends")
+
+    def _trend_error(self, error):
+        self._trend_text.config(state=tk.NORMAL)
+        self._trend_text.insert(tk.END, f"\n⚠️ Error: {error}\n")
+        self._trend_text.config(state=tk.DISABLED)
+        self._trend_btn.configure(state=tk.NORMAL, text="Generate Trends")
 
     def _refresh_data(self):
         try:
@@ -2487,7 +2637,7 @@ def main():
     tabview.add("🎙  Live Transcription")
     tabview.add("🔍  Notes Retrieval")
     tabview.add("🌐  Customer Research")
-    tabview.add("📊  Insights")
+    tabview.add("📊  Trends & Insights")
 
     # Tab 1 — existing app (pass the tab frame as root)
     tab1_frame = tabview.tab("🎙  Live Transcription")
@@ -2502,7 +2652,7 @@ def main():
     CustomerResearchTab(tab3_frame)
 
     # Tab 4 — insights dashboard
-    tab4_frame = tabview.tab("📊  Insights")
+    tab4_frame = tabview.tab("📊  Trends & Insights")
     InsightsTab(tab4_frame)
 
     root.protocol("WM_DELETE_WINDOW", lambda: (shutdown_agent(), root.destroy()))
