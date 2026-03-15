@@ -19,21 +19,21 @@ _link_counter = 0
 
 def configure_tags(text_widget):
     """Set up all the text tags on a ScrolledText widget."""
-    text_widget.tag_configure("h1", font=("Segoe UI Semibold", 14), foreground="#f9e2af",
+    text_widget.tag_configure("h1", font=("Segoe UI Semibold", 14), foreground="#e5e7eb",
                               spacing1=8, spacing3=4)
-    text_widget.tag_configure("h2", font=("Segoe UI Semibold", 12), foreground="#89b4fa",
+    text_widget.tag_configure("h2", font=("Segoe UI Semibold", 12), foreground="#10a37f",
                               spacing1=6, spacing3=3)
-    text_widget.tag_configure("h3", font=("Segoe UI Semibold", 11), foreground="#74c7ec",
+    text_widget.tag_configure("h3", font=("Segoe UI Semibold", 11), foreground="#6ee7b7",
                               spacing1=4, spacing3=2)
-    text_widget.tag_configure("bold", font=("Segoe UI Semibold", 10), foreground="#ffffff")
-    text_widget.tag_configure("code", font=("Consolas", 10), foreground="#a6e3a1",
-                              background="#313150")
-    text_widget.tag_configure("bullet", foreground="#d8ddf4", lmargin1=16, lmargin2=28,
+    text_widget.tag_configure("bold", font=("Segoe UI Semibold", 10), foreground="#f3f4f6")
+    text_widget.tag_configure("code", font=("Consolas", 10), foreground="#6ee7b7",
+                              background="#1a2332")
+    text_widget.tag_configure("bullet", foreground="#d1d5db", lmargin1=16, lmargin2=28,
                               font=("Segoe UI", 10))
-    text_widget.tag_configure("body", foreground="#d8ddf4", font=("Segoe UI", 10))
-    text_widget.tag_configure("hr", foreground="#45475a", font=("Segoe UI", 6),
+    text_widget.tag_configure("body", foreground="#d1d5db", font=("Segoe UI", 10))
+    text_widget.tag_configure("hr", foreground="#374151", font=("Segoe UI", 6),
                               spacing1=4, spacing3=4)
-    text_widget.tag_configure("link", foreground="#89b4fa", font=("Segoe UI", 10),
+    text_widget.tag_configure("link", foreground="#60a5fa", font=("Segoe UI", 10),
                               underline=True)
     # Change cursor to hand when hovering over links
     text_widget.tag_bind("link", "<Enter>",
@@ -41,11 +41,11 @@ def configure_tags(text_widget):
     text_widget.tag_bind("link", "<Leave>",
                          lambda e: text_widget.config(cursor=""))
     # Keep existing tags for question/status/separator
-    text_widget.tag_configure("question", foreground="#f9e2af",
+    text_widget.tag_configure("question", foreground="#fbbf24",
                               font=("Segoe UI Semibold", 11))
-    text_widget.tag_configure("status", foreground="#a6adc8",
+    text_widget.tag_configure("status", foreground="#9ca3af",
                               font=("Segoe UI Italic", 10))
-    text_widget.tag_configure("separator", foreground="#45475a")
+    text_widget.tag_configure("separator", foreground="#374151")
 
 
 class MarkdownStreamer:
@@ -178,7 +178,7 @@ def _insert_inline(widget, text: str, base_tag: str):
             # Create a unique tag for this link so each has its own click handler
             _link_counter += 1
             link_tag = f"link_{_link_counter}"
-            widget.tag_configure(link_tag, foreground="#89b4fa", font=("Segoe UI", 10),
+            widget.tag_configure(link_tag, foreground="#60a5fa", font=("Segoe UI", 10),
                                  underline=True)
             link_url = url  # capture for closure
             widget.tag_bind(link_tag, "<Button-1>",

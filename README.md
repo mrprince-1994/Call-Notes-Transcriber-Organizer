@@ -66,18 +66,18 @@ Verify with:
 aws sts get-caller-identity
 ```
 
-### 2. Enable Bedrock Model Access
+### 2. Verify Bedrock Model Access
 
 1. Go to the [Bedrock console](https://console.aws.amazon.com/bedrock/)
 2. Select your region (default: `us-east-1`)
 3. Navigate to **Model access** in the left sidebar
-4. Request access to **Anthropic Claude** models
+4. Verify that **Anthropic Claude** models show as available
 
 ---
 
 ## Audio Setup
 
-The app requires VB-CABLE to capture system audio from calls. See **[AUDIO_SETUP_GUIDE.md](AUDIO_SETUP_GUIDE.md)** for detailed instructions on:
+The app requires VB-CABLE to capture system audio from calls. See **[call_notes_app/AUDIO_SETUP_GUIDE.md](call_notes_app/AUDIO_SETUP_GUIDE.md)** for detailed instructions on:
 
 - Setting up VB-CABLE for headset use
 - Setting up VB-CABLE for laptop speakers
@@ -191,7 +191,9 @@ call_notes_app/
 └── agentcore_agent/              # Deployable AgentCore agents
     ├── agent.py                  # Strands Agent with MCP tools for AWS doc search
     ├── requirements.txt          # Agent-specific dependencies
-    └── README.md                 # Agent deployment guide
+    ├── README.md                 # Agent deployment guide
+    ├── research_agent/           # Customer research agent
+    └── retrieval_agent/          # Notes retrieval agent
 ```
 
 ---
@@ -200,13 +202,31 @@ call_notes_app/
 
 The app includes an AI agent that detects AWS-related questions during calls and automatically answers them by searching live AWS documentation.
 
+### How It Works
+
+When someone asks a question like "What is Amazon Bedrock?" during a call, the question detector picks it up and routes it to the agent. The agent uses MCP tool integration to search and read actual AWS docs before answering.
+
 ### Three Modes (automatic fallback)
 
-1. **AgentCore Runtime** — If deployed, connects via WebSocket with SigV4 auth
-2. **Local MCP** — Runs the agent in-process with MCP doc search tools
-3. **Direct Bedrock** — Falls back to a simple Claude call without doc search
+1. **AgentCore Runtime** — If `AGENTCORE_RUNTIME_ARN` is set in `agent_client.py`, connects to the deployed agent via WebSocket with SigV4 auth
+2. **Local MCP** — If `strands-agents` and `mcp` are installed, runs the agent in-process with MCP doc search tools
+3. **Direct Bedrock** — Falls back to a simple Claude call without doc search tools
 
-See [`call_notes_app/agentcore_agent/README.md`](call_notes_app/agentcore_agent/README.md) for deployment instructions.
+### Deploying the Agent
+
+See [`call_notes_app/agentcore_agent/README.md`](call_notes_app/agentcore_agent/README.md) for full deployment instructions. Quick version:
+
+```bash
+pip install bedrock-agentcore-starter-toolkit
+cd call_notes_app/agentcore_agent
+agentcore configure --entrypoint agent.py --non-interactive --region us-east-1
+agentcore launch
+```
+
+Then set the ARN in `config.py`:
+```python
+AGENTCORE_RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:YOUR_ACCOUNT_ID:runtime/YOUR_AGENT_ID"
+```
 
 ---
 

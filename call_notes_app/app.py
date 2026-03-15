@@ -12,41 +12,46 @@ from md_render import configure_tags, MarkdownStreamer
 from retrieval.notes_retriever import scan_notes, ask_notes_agent, ask_research_agent, NOTE_SOURCES, dedupe_customers
 from retrieval.chat_history import save_chat_session, list_chat_sessions, load_chat_session, delete_chat_session, _ensure_table
 
-# --- Color Palette (monochrome) ---
-BG_DARK = "#0a0a0a"
-BG_PANEL = "#141414"
-BG_INPUT = "#1e1e1e"
-BG_CARD = "#1a1a1a"
-FG_TEXT = "#d4d4d4"
-FG_DIM = "#8a8a8a"
-FG_BRIGHT = "#f0f0f0"
-ACCENT = "#ffffff"
-ACCENT_HOVER = "#e0e0e0"
-GREEN = "#a0a0a0"
-GREEN_HOVER = "#b8b8b8"
-RED = "#c0c0c0"
-RED_HOVER = "#d8d8d8"
-ORANGE = "#b0b0b0"
-YELLOW = "#e8e8e8"
-YELLOW_HOVER = "#f5f5f5"
-BORDER = "#2e2e2e"
+# --- Color Palette (modern chat UI) ---
+BG_DARK = "#0d0d0d"        # App background
+BG_PANEL = "#171717"        # Panel/card backgrounds
+BG_INPUT = "#1e1e1e"        # Input fields, text areas
+BG_CARD = "#212121"         # Elevated cards, hover states
+FG_TEXT = "#d1d5db"         # Body text
+FG_DIM = "#6b7280"          # Secondary/muted text
+FG_BRIGHT = "#f3f4f6"       # Headings, emphasis
+ACCENT = "#10a37f"          # Primary accent (green, ChatGPT-like)
+ACCENT_HOVER = "#0d8c6d"    # Accent hover
+GREEN = "#10a37f"           # Start/action buttons
+GREEN_HOVER = "#0d8c6d"
+RED = "#ef4444"             # Stop/delete
+RED_HOVER = "#dc2626"
+ORANGE = "#f59e0b"          # Status/warning
+YELLOW = "#10a37f"          # Send button (matches accent)
+YELLOW_HOVER = "#0d8c6d"
+BORDER = "#2d2d2d"          # Subtle borders
+USER_BUBBLE = "#2b2b2b"     # User message background
+ASST_BUBBLE = "#171717"     # Assistant message background
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
 class StyledText(tk.Text):
-    """Dark-themed tk.Text with a CTk scrollbar, wrapped in a rounded frame."""
+    """Modern dark-themed tk.Text with a CTk scrollbar, wrapped in a rounded frame."""
 
     def __init__(self, master, **kwargs):
-        self._outer = ctk.CTkFrame(master, fg_color=BG_INPUT, corner_radius=8,
+        self._outer = ctk.CTkFrame(master, fg_color=BG_INPUT, corner_radius=12,
                                     border_width=1, border_color=BORDER)
+        # Default font, but allow caller to override
+        if 'font' not in kwargs:
+            kwargs['font'] = ("Segoe UI", 10)
         super().__init__(self._outer, wrap=tk.WORD, bg=BG_INPUT, fg=FG_TEXT,
                          insertbackground=FG_BRIGHT, borderwidth=0, highlightthickness=0,
-                         padx=10, pady=8, selectbackground=ACCENT,
+                         padx=14, pady=10, selectbackground=ACCENT,
                          selectforeground=BG_DARK, state=tk.DISABLED, **kwargs)
         sb = ctk.CTkScrollbar(self._outer, command=self.yview, fg_color=BG_INPUT,
-                               button_color=BORDER, button_hover_color=ACCENT)
+                               button_color="#3a3a3a", button_hover_color=ACCENT)
         self.configure(yscrollcommand=sb.set)
         super().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 2), pady=4)
@@ -892,9 +897,6 @@ class NotesRetrieverTab:
                           target=self._load_session_history, daemon=True).start()
                       ).pack(side=tk.RIGHT)
 
-        # Filter: All / Retrieval only
-        sh_filter_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        sh_filter_frame.pack(fill=tk.X, padx=10, pady=(0, 6))
         self._sh_filter_var = tk.StringVar(value="retrieval")
 
         sh_list_frame = ctk.CTkFrame(sidebar, fg_color=BG_INPUT, corner_radius=6)
@@ -922,21 +924,12 @@ class NotesRetrieverTab:
         # ── Right: main content ────────────────────────────────────────────
         main = ctk.CTkFrame(body, fg_color="transparent")
         main.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=0)
-        main.rowconfigure(3, weight=1)
+        main.rowconfigure(2, weight=1)
         main.columnconfigure(0, weight=1)
-
-        # Directory info bar
-        dir_bar = ctk.CTkFrame(main, fg_color=BG_CARD, corner_radius=6)
-        dir_bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        for _, label in NOTE_SOURCES:
-            ctk.CTkLabel(dir_bar, text=f"📁  {label}",
-                         text_color=FG_DIM, font=ctk.CTkFont("Consolas", 10),
-                         anchor="w").pack(fill=tk.X, padx=10, pady=(4, 0))
-        ctk.CTkFrame(dir_bar, fg_color="transparent", height=4).pack()
 
         # Source + customer filter row
         filter_row = ctk.CTkFrame(main, fg_color="transparent")
-        filter_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        filter_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         ctk.CTkLabel(filter_row, text="Source:",
                      text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 11)).pack(side=tk.LEFT)
         self.source_filter_var = tk.StringVar(value="All Sources")
@@ -967,7 +960,7 @@ class NotesRetrieverTab:
 
         # Suggested prompts
         prompts_frame = ctk.CTkFrame(main, fg_color="transparent")
-        prompts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        prompts_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         ctk.CTkLabel(prompts_frame, text="Suggestions:",
                      text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 10)).pack(side=tk.LEFT)
         for prompt in [
@@ -987,7 +980,7 @@ class NotesRetrieverTab:
         # Chat panel
         chat_outer = ctk.CTkFrame(main, fg_color=BG_PANEL, corner_radius=10,
                                    border_width=1, border_color=BORDER)
-        chat_outer.grid(row=3, column=0, sticky="nsew", pady=(0, 0))
+        chat_outer.grid(row=2, column=0, sticky="nsew", pady=(0, 0))
         chat_outer.rowconfigure(0, weight=1)
         chat_outer.rowconfigure(1, weight=0)
         chat_outer.columnconfigure(0, weight=1)
@@ -1010,14 +1003,15 @@ class NotesRetrieverTab:
         self.chat_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=(32, 4))
         configure_tags(self.chat_text)
         self.chat_text.tag_configure(
-            "user_msg", foreground=ACCENT,
-            font=("Segoe UI Semibold", 10), lmargin1=8, lmargin2=8, spacing1=6)
+            "user_msg", foreground="#e5e7eb",
+            font=("Segoe UI", 10), lmargin1=12, lmargin2=12, spacing1=4,
+            background=USER_BUBBLE, relief="flat")
         self.chat_text.tag_configure(
             "user_label", foreground=ACCENT,
-            font=("Segoe UI", 9), spacing1=8)
+            font=("Segoe UI Semibold", 9), spacing1=10)
         self.chat_text.tag_configure(
-            "assistant_label", foreground=YELLOW,
-            font=("Segoe UI", 9), spacing1=8)
+            "assistant_label", foreground="#a78bfa",
+            font=("Segoe UI Semibold", 9), spacing1=10)
 
         input_row = ctk.CTkFrame(chat_outer, fg_color=BG_CARD, corner_radius=0)
         input_row.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
@@ -1632,12 +1626,13 @@ class CustomerResearchTab:
         self.chat_text = StyledText(chat_outer, font=("Segoe UI", 10))
         self.chat_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=(32, 4))
         configure_tags(self.chat_text)
-        self.chat_text.tag_configure("user_msg", foreground=ACCENT,
-            font=("Segoe UI Semibold", 10), lmargin1=8, lmargin2=8, spacing1=6)
+        self.chat_text.tag_configure("user_msg", foreground="#e5e7eb",
+            font=("Segoe UI", 10), lmargin1=12, lmargin2=12, spacing1=4,
+            background=USER_BUBBLE, relief="flat")
         self.chat_text.tag_configure("user_label", foreground=ACCENT,
-            font=("Segoe UI", 9), spacing1=8)
-        self.chat_text.tag_configure("assistant_label", foreground=YELLOW,
-            font=("Segoe UI", 9), spacing1=8)
+            font=("Segoe UI Semibold", 9), spacing1=10)
+        self.chat_text.tag_configure("assistant_label", foreground="#a78bfa",
+            font=("Segoe UI Semibold", 9), spacing1=10)
 
         input_row = ctk.CTkFrame(chat_outer, fg_color=BG_CARD, corner_radius=0)
         input_row.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
