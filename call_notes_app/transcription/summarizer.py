@@ -132,6 +132,19 @@ Then a blank line, then the email body."""
 
 def generate_followup_email(transcript: str, customer_name: str, on_chunk=None) -> str:
     """Generate a follow-up email from a call transcript using Claude on Bedrock."""
+    import os
+
+    # Load personal style guide if available
+    style_guide = ""
+    style_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "style_guide.txt")
+    if os.path.exists(style_path):
+        with open(style_path, "r", encoding="utf-8") as f:
+            style_guide = f.read().strip()
+
+    system = EMAIL_SYSTEM_PROMPT
+    if style_guide:
+        system += "\n\nIMPORTANT — Write in the author's personal style described below:\n\n" + style_guide
+
     client = boto3.client(
         "bedrock-runtime",
         region_name=AWS_REGION,
@@ -141,7 +154,7 @@ def generate_followup_email(transcript: str, customer_name: str, on_chunk=None) 
     payload = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 4096,
-        "system": EMAIL_SYSTEM_PROMPT,
+        "system": system,
         "messages": [
             {
                 "role": "user",

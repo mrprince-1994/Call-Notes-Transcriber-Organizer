@@ -1,0 +1,40 @@
+# Email Style Guide: Michael Prince
+
+## 1. GREETING STYLE
+Use "Hi [Name(s)]," as the default. Shift to "Hey [Name]," only for very casual, one-line messages (e.g., "Hey Will –"). For groups, use "Hi everyone," or "Hi Team,". Always address recipients by first name, never titles.
+
+## 2. TONE
+Warm but efficient. Professional without being stiff. Expresses genuine enthusiasm with phrases like "Beyond excited to have the additional support" and "We're energized by the opportunity to partner more intentionally." Apologizes briefly without over-explaining: "Apologies for the delay – was traveling yesterday."
+
+## 3. SENTENCE STRUCTURE
+Mix of short, direct sentences and longer explanatory ones. Punchy openers followed by supporting detail. Example: "Thanks for the great conversation this morning. Appreciate the candor on where things stand and what you need."
+
+## 4. TRANSITION PHRASES
+- "Here's the follow-up I committed to."
+- "I wanted to follow up promptly with..."
+- "What would help us move:"
+- "Let me know."
+- Em-dashes (–) used heavily to connect clauses mid-sentence.
+
+## 5. CLOSING STYLE
+Default sign-off is "Best," on its own line. Casual messages may end with just "Thank you," or no sign-off. Never uses "Best regards," "Sincerely," or "Cheers."
+
+## 6. VOCABULARY PATTERNS
+- "Work backwards from" / "move forward"
+- "Momentum," "inflection point," "differentiated value"
+- "Dive deeper," "go deeper on"
+- "Let us know" (preferred over "please advise")
+- "Happy to coordinate," "would love to"
+- Occasional 😊 emoji in warm internal messages
+
+## 7. FORMATTING HABITS
+Uses numbered lists for next steps and attached materials. Uses bullet points (asterisks) for options or features. Uses bold section headers for longer emails. Uses pipe-separated tables for action item tracking. Keeps technical specs inline without over-formatting.
+
+## 8. PARAGRAPH LENGTH
+Short — typically 2–4 sentences. One idea per paragraph. Never writes dense walls of text. Long emails are broken into clearly labeled sections.
+
+## 9. ACTION ITEM STYLE
+Explicit and owner-tagged. Format: numbered list with name, task, and dependency noted. Example style: "| 1 | Task description | @Name to action." In less formal contexts, uses a simple numbered list with team assignments noted inline.
+
+## 10. OVERALL VOICE
+Michael writes like a sharp, relationship-driven sales professional — warm and collegial internally, crisp and value-focused externally. He leads with energy and follow-through, keeps emails scannable, and always closes with a clear next step or open door. His emails feel personally written, never templated.

@@ -458,8 +458,9 @@ class CallNotesApp:
         if not email:
             messagebox.showinfo("Nothing to send", "No follow-up email generated yet.")
             return
-        # Strip markdown
         import re
+
+        # Strip markdown syntax
         clean = re.sub(r'\*\*(.+?)\*\*', r'\1', email)
         clean = re.sub(r'__(.+?)__', r'\1', clean)
         clean = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', clean)
@@ -467,7 +468,7 @@ class CallNotesApp:
         clean = re.sub(r'^#{1,6}\s+', '', clean, flags=re.MULTILINE)
         clean = re.sub(r'`(.+?)`', r'\1', clean)
 
-        # Parse subject line if present
+        # Parse subject line
         lines = clean.split("\n", 2)
         subject = ""
         body = clean
@@ -475,13 +476,56 @@ class CallNotesApp:
             subject = lines[0].split(":", 1)[1].strip()
             body = "\n".join(lines[1:]).strip()
 
+        # Convert plain text to styled HTML for Outlook
+        html_lines = []
+        lines_list = body.split("\n")
+        i = 0
+        while i < len(lines_list):
+            stripped = lines_list[i].strip()
+            if not stripped:
+                # Blank line = intentional paragraph break
+                html_lines.append('<br>')
+                i += 1
+                continue
+
+            if stripped.startswith("- "):
+                # Collect consecutive bullet items
+                bullets = []
+                while i < len(lines_list) and lines_list[i].strip().startswith("- "):
+                    bullets.append(lines_list[i].strip()[2:])
+                    i += 1
+                bullet_html = "".join(
+                    f'<li style="margin: 0; padding: 0;">{b}</li>' for b in bullets
+                )
+                html_lines.append(
+                    f'<ul style="margin: 0 0 0 24px; padding: 0;">{bullet_html}</ul>'
+                )
+            elif len(stripped) < 60 and not stripped.endswith(".") and not stripped.endswith(","):
+                # Section header — eat any blank lines immediately after it
+                html_lines.append(f'<p style="margin: 0;"><b>{stripped}</b></p>')
+                i += 1
+                while i < len(lines_list) and not lines_list[i].strip():
+                    i += 1  # skip blank lines between header and content
+            else:
+                html_lines.append(f'<p style="margin: 0;">{stripped}</p>')
+                i += 1
+
+        html_body = (
+            '<div style="font-family: Aptos, Calibri, sans-serif; font-size: 11pt; color: #1a1a1a; line-height: 1.5;">'
+            + "\n".join(html_lines)
+            + "</div>"
+        )
+
         try:
             import win32com.client
             outlook = win32com.client.Dispatch("Outlook.Application")
-            mail = outlook.CreateItem(0)  # 0 = olMailItem
+            mail = outlook.CreateItem(0)
             mail.Subject = subject
-            mail.Body = body
-            mail.Save()  # Saves to Drafts
+            # Display first so Outlook inserts the default signature
+            mail.Display()
+            # Prepend our email body before the signature
+            mail.HTMLBody = html_body + mail.HTMLBody
+            mail.Save()
             self.status_var.set("📨 Email saved to Outlook Drafts!")
         except ImportError:
             messagebox.showerror("Missing Library",
@@ -1491,11 +1535,12 @@ class CustomerResearchTab:
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
             command=self._new_chat).pack(side=tk.RIGHT, padx=(8, 0))
 
-        # Body: sidebar + chat
+        # Body: sidebar + chat + brief panel
         body = ctk.CTkFrame(parent, fg_color="transparent")
         body.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
-        body.columnconfigure(0, weight=0)
-        body.columnconfigure(1, weight=1)
+        body.columnconfigure(0, weight=0)   # sidebar
+        body.columnconfigure(1, weight=1)   # chat
+        body.columnconfigure(2, weight=0)   # brief panel
         body.rowconfigure(0, weight=1)
 
         # Sidebar
@@ -1540,7 +1585,7 @@ class CustomerResearchTab:
 
         # Main chat area
         main = ctk.CTkFrame(body, fg_color="transparent")
-        main.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=0)
+        main.grid(row=0, column=1, sticky="nsew", padx=(0, 6), pady=0)
         main.rowconfigure(1, weight=1)
         main.columnconfigure(0, weight=1)
 
@@ -1613,6 +1658,79 @@ class CustomerResearchTab:
             font=ctk.CTkFont("Segoe UI", 12, "bold"), corner_radius=6,
             command=self._send)
         self.send_btn.grid(row=0, column=1, padx=(0, 10), pady=8)
+
+        # ── Right: Customer Brief panel ──
+        brief_panel = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=10,
+                                    border_width=1, border_color=BORDER, width=240)
+        brief_panel.grid(row=0, column=2, sticky="nsew", padx=(6, 16), pady=(0, 8))
+        brief_panel.grid_propagate(False)
+
+        ctk.CTkLabel(brief_panel, text="📄  Customer Brief",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=ACCENT).pack(anchor=tk.W, padx=12, pady=(12, 8))
+
+        ctk.CTkLabel(brief_panel, text="Company Name:",
+                     text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 11)
+                     ).pack(anchor=tk.W, padx=12, pady=(4, 0))
+        self.brief_company_var = tk.StringVar()
+        ctk.CTkEntry(brief_panel, textvariable=self.brief_company_var, width=210,
+                     fg_color=BG_INPUT, border_color=BORDER, text_color=FG_BRIGHT,
+                     font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
+                     placeholder_text="e.g. Denali Therapeutics"
+                     ).pack(padx=12, pady=(2, 6))
+
+        ctk.CTkLabel(brief_panel, text="Domain:",
+                     text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 11)
+                     ).pack(anchor=tk.W, padx=12, pady=(0, 0))
+        self.brief_domain_var = tk.StringVar()
+        ctk.CTkEntry(brief_panel, textvariable=self.brief_domain_var, width=210,
+                     fg_color=BG_INPUT, border_color=BORDER, text_color=FG_BRIGHT,
+                     font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
+                     placeholder_text="e.g. denalitherapeutics.com"
+                     ).pack(padx=12, pady=(2, 8))
+
+        self.brief_generate_btn = ctk.CTkButton(
+            brief_panel, text="📄  Create Customer Brief", width=210, height=36,
+            fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG_DARK,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"), corner_radius=8,
+            command=self._generate_brief)
+        self.brief_generate_btn.pack(padx=12, pady=(0, 8))
+
+        self.brief_status_var = tk.StringVar(value="")
+        self.brief_status_label = ctk.CTkLabel(
+            brief_panel, textvariable=self.brief_status_var,
+            text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 10),
+            wraplength=210)
+        self.brief_status_label.pack(padx=12, pady=(0, 8))
+
+    # ── Brief generation ──
+
+    def _generate_brief(self):
+        company = self.brief_company_var.get().strip()
+        domain = self.brief_domain_var.get().strip()
+        if not company or not domain:
+            from tkinter import messagebox
+            messagebox.showwarning("Missing Info", "Please enter both company name and domain.")
+            return
+        self.brief_generate_btn.configure(state=tk.DISABLED, text="⏳ Generating...")
+        self.brief_status_var.set("Starting research...")
+
+        def run():
+            try:
+                from retrieval.customer_brief import generate_customer_brief
+
+                def on_status(msg):
+                    self.brief_generate_btn.after(0, lambda: self.brief_status_var.set(msg))
+
+                filepath = generate_customer_brief(company, domain, on_status=on_status)
+                self.brief_generate_btn.after(0, lambda: self.brief_status_var.set(f"✅ Saved:\n{filepath}"))
+            except Exception as e:
+                self.brief_generate_btn.after(0, lambda: self.brief_status_var.set(f"❌ Error: {e}"))
+            finally:
+                self.brief_generate_btn.after(0, lambda: self.brief_generate_btn.configure(
+                    state=tk.NORMAL, text="📄  Create Customer Brief"))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ── Actions ──
 
