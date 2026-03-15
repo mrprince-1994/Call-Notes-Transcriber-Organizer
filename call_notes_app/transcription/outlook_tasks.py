@@ -70,7 +70,7 @@ def create_outlook_tasks(action_items: list, customer_name: str) -> int:
         due_text = item.get("due", "")
 
         try:
-            # 3 = olTaskItem
+            # 3 = olTaskItem — these appear in Outlook To Do under "Tasks"
             task = outlook.CreateItem(3)
             task.Subject = f"[{customer_name}] {task_text}"
             task.Body = (
@@ -80,6 +80,8 @@ def create_outlook_tasks(action_items: list, customer_name: str) -> int:
                 f"Priority: {priority_text}\n\n"
                 f"Auto-generated from call notes on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
+            task.Categories = "Call Notes"
+            task.Status = 0  # 0 = olTaskNotStarted (shows as active in To Do)
 
             # Set priority (0=low, 1=normal, 2=high)
             if priority_text == "high":
@@ -89,14 +91,18 @@ def create_outlook_tasks(action_items: list, customer_name: str) -> int:
             else:
                 task.Importance = 1
 
-            # Set due date if parseable
+            # Set due date if parseable — tasks with due dates show in To Do "Planned"
             due_date = _parse_due_date(due_text)
             if due_date:
                 task.DueDate = due_date.strftime("%m/%d/%Y")
+                task.StartDate = datetime.now().strftime("%m/%d/%Y")
                 # Set reminder 1 day before
                 task.ReminderSet = True
                 reminder_date = due_date - timedelta(days=1)
                 task.ReminderTime = reminder_date.strftime("%m/%d/%Y 9:00 AM")
+            else:
+                # No deadline — still set a start date so it shows in To Do
+                task.StartDate = datetime.now().strftime("%m/%d/%Y")
 
             task.Save()
             created += 1
