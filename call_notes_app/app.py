@@ -2221,6 +2221,164 @@ class CustomerResearchTab:
             pass
 
 
+class InsightsTab:
+    """Tab 4 — Call Analytics + Competitive Intelligence dashboard."""
+
+    def __init__(self, parent):
+        self._build_ui(parent)
+        threading.Thread(target=self._refresh_data, daemon=True).start()
+
+    def _build_ui(self, parent):
+        top = ctk.CTkFrame(parent, fg_color="transparent")
+        top.pack(fill=tk.X, padx=16, pady=(14, 6))
+
+        ctk.CTkLabel(top, text="📊  Insights",
+                     font=ctk.CTkFont("Segoe UI", 15, "bold"),
+                     text_color=FG_BRIGHT).pack(side=tk.LEFT)
+
+        ctk.CTkButton(
+            top, text="⟳ Refresh", width=100, height=30,
+            fg_color=BG_INPUT, hover_color=BG_CARD, text_color=ACCENT,
+            border_width=1, border_color=BORDER, corner_radius=6,
+            font=ctk.CTkFont("Segoe UI", 11),
+            command=lambda: threading.Thread(target=self._refresh_data, daemon=True).start()
+        ).pack(side=tk.RIGHT)
+
+        self.status_label = ctk.CTkLabel(
+            top, text="Loading...", text_color=FG_DIM,
+            font=ctk.CTkFont("Segoe UI", 10))
+        self.status_label.pack(side=tk.RIGHT, padx=(0, 12))
+
+        # Two-column layout
+        body = ctk.CTkFrame(parent, fg_color="transparent")
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        # Left: Call Analytics
+        left = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=12,
+                             border_width=1, border_color=BORDER)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+
+        ctk.CTkLabel(left, text="📈  Call Analytics",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=ACCENT).pack(anchor=tk.W, padx=14, pady=(14, 8))
+
+        self.analytics_text = StyledText(left, font=("Segoe UI", 10))
+        self.analytics_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+
+        # Right: Competitive Intel
+        right = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=12,
+                              border_width=1, border_color=BORDER)
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        ctk.CTkLabel(right, text="⚔️  Competitive Intelligence",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=ACCENT).pack(anchor=tk.W, padx=14, pady=(14, 8))
+
+        self.intel_text = StyledText(right, font=("Segoe UI", 10))
+        self.intel_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+
+    def _refresh_data(self):
+        # Gather analytics
+        try:
+            from transcription.history import list_sessions
+            from transcription.competitive_intel import get_all_mentions, get_competitor_summary
+            from datetime import datetime, timedelta
+
+            all_sessions = list_sessions()
+            now = datetime.now()
+
+            # Time-based filters
+            week_ago = (now - timedelta(days=7)).isoformat()
+            month_ago = (now - timedelta(days=30)).isoformat()
+            this_week = [s for s in all_sessions if s.get("timestamp", "") >= week_ago]
+            this_month = [s for s in all_sessions if s.get("timestamp", "") >= month_ago]
+
+            # Customer frequency
+            customer_counts = {}
+            for s in all_sessions:
+                c = s.get("customer_name", "Unknown")
+                customer_counts[c] = customer_counts.get(c, 0) + 1
+            top_customers = sorted(customer_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+
+            # Monthly customer counts
+            monthly_customers = {}
+            for s in this_month:
+                c = s.get("customer_name", "Unknown")
+                monthly_customers[c] = monthly_customers.get(c, 0) + 1
+
+            # Build analytics text
+            lines = []
+            lines.append(f"OVERVIEW")
+            lines.append(f"  Total sessions:     {len(all_sessions)}")
+            lines.append(f"  This week:          {len(this_week)}")
+            lines.append(f"  This month:         {len(this_month)}")
+            lines.append(f"  Unique customers:   {len(customer_counts)}")
+            lines.append("")
+            lines.append(f"THIS WEEK ({len(this_week)} calls)")
+            for s in this_week[:10]:
+                ts = s.get("timestamp", "")[:10]
+                lines.append(f"  - {s.get('customer_name', '?')}  ({ts})")
+            lines.append("")
+            lines.append("TOP CUSTOMERS (all time)")
+            for name, count in top_customers:
+                bar = "█" * min(count, 20)
+                lines.append(f"  {name:<25} {bar} {count}")
+            lines.append("")
+            lines.append(f"THIS MONTH — {len(monthly_customers)} unique customers")
+            for name, count in sorted(monthly_customers.items(), key=lambda x: x[1], reverse=True)[:10]:
+                lines.append(f"  - {name} ({count} call{'s' if count > 1 else ''})")
+
+            analytics = "\n".join(lines)
+
+            # Competitive intel
+            comp_summary = get_competitor_summary()
+            all_mentions = get_all_mentions(limit=50)
+
+            intel_lines = []
+            if comp_summary:
+                intel_lines.append("COMPETITOR FREQUENCY")
+                for comp, count in list(comp_summary.items())[:15]:
+                    bar = "█" * min(count, 20)
+                    intel_lines.append(f"  {comp:<25} {bar} {count}")
+                intel_lines.append("")
+                intel_lines.append("RECENT MENTIONS")
+                for m in all_mentions[:20]:
+                    ts = m.get("timestamp", "")[:10]
+                    cust = m.get("customer", "?")
+                    comp = m.get("competitor", "?")
+                    sentiment = m.get("sentiment", "")
+                    icon = {"positive": "👍", "negative": "👎", "neutral": "➖"}.get(sentiment, "➖")
+                    context = m.get("context", "")[:80]
+                    intel_lines.append(f"  {icon} {comp} — {cust} ({ts})")
+                    if context:
+                        intel_lines.append(f"     {context}")
+            else:
+                intel_lines.append("No competitor mentions tracked yet.")
+                intel_lines.append("")
+                intel_lines.append("Competitor mentions are automatically extracted")
+                intel_lines.append("from call notes after each recording session.")
+
+            intel = "\n".join(intel_lines)
+
+            # Update UI
+            self.analytics_text.after(0, lambda: self._update_panel(self.analytics_text, analytics))
+            self.intel_text.after(0, lambda: self._update_panel(self.intel_text, intel))
+            self.status_label.after(0, lambda: self.status_label.configure(
+                text=f"Updated {now.strftime('%H:%M')}"))
+
+        except Exception as e:
+            self.status_label.after(0, lambda: self.status_label.configure(text=f"Error: {e}"))
+
+    def _update_panel(self, widget, text):
+        widget.config(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        widget.insert(tk.END, text)
+        widget.config(state=tk.DISABLED)
+
+
 def main():
     root = ctk.CTk()
     root.title("Call Notes — Live Transcriber")
@@ -2242,6 +2400,7 @@ def main():
     tabview.add("🎙  Live Transcription")
     tabview.add("🔍  Notes Retrieval")
     tabview.add("🌐  Customer Research")
+    tabview.add("📊  Insights")
 
     # Tab 1 — existing app (pass the tab frame as root)
     tab1_frame = tabview.tab("🎙  Live Transcription")
@@ -2254,6 +2413,10 @@ def main():
     # Tab 3 — customer research agent
     tab3_frame = tabview.tab("🌐  Customer Research")
     CustomerResearchTab(tab3_frame)
+
+    # Tab 4 — insights dashboard
+    tab4_frame = tabview.tab("📊  Insights")
+    InsightsTab(tab4_frame)
 
     root.protocol("WM_DELETE_WINDOW", lambda: (shutdown_agent(), root.destroy()))
     root.mainloop()
