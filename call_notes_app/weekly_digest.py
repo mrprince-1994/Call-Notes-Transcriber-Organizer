@@ -145,10 +145,11 @@ def create_outlook_draft(digest_text):
     outlook = win32com.client.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)
     mail.Subject = subject
+    mail.To = "mrprince@amazon.com"
     mail.Display()
     mail.HTMLBody = html_body + mail.HTMLBody
-    mail.Save()
-    print(f"Outlook draft created: {subject}")
+    mail.Send()
+    print(f"Weekly digest sent to mrprince@amazon.com: {subject}")
 
 
 def main():
@@ -165,13 +166,16 @@ def main():
         print("Failed to generate digest.")
         return
 
-    print("Creating Outlook draft...")
+    print("Sending weekly digest...")
     try:
         create_outlook_draft(digest)
-        print("Done! Check your Outlook Drafts.")
+        print("Done! Digest sent.")
     except Exception as e:
         # If Outlook isn't available, save to file instead
-        fallback = os.path.join(os.path.dirname(__file__), f"weekly_digest_{datetime.now().strftime('%Y-%m-%d')}.txt")
+        from config import NOTES_BASE_DIR
+        fallback_dir = os.path.join(NOTES_BASE_DIR, "_Weekly Digests")
+        os.makedirs(fallback_dir, exist_ok=True)
+        fallback = os.path.join(fallback_dir, f"weekly_digest_{datetime.now().strftime('%Y-%m-%d')}.txt")
         with open(fallback, "w", encoding="utf-8") as f:
             f.write(digest)
         print(f"Outlook not available ({e}). Saved to: {fallback}")

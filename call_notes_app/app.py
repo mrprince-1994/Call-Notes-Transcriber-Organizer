@@ -1,4 +1,5 @@
 import tkinter as tk
+import os
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
 import threading
@@ -808,22 +809,55 @@ class CallNotesApp:
 
         def run():
             try:
-                # Get last 3 sessions for this customer
+                # Get sessions from DynamoDB history
                 sessions = list_sessions(customer)[:3]
-                if not sessions:
+
+                # Also scan local note files for this customer
+                local_notes = []
+                try:
+                    all_notes = scan_notes()
+                    customer_lower = customer.lower()
+                    for note in all_notes:
+                        if customer_lower in note.get("customer", "").lower():
+                            # Read the file content
+                            fpath = note.get("filepath", "")
+                            if fpath and os.path.exists(fpath):
+                                try:
+                                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                                        content = f.read()[:5000]  # cap per file
+                                    local_notes.append({
+                                        "timestamp": note.get("date", ""),
+                                        "notes": content,
+                                        "source": f"[{note.get('source', 'file')}] {note.get('filename', '')}",
+                                    })
+                                except Exception:
+                                    pass
+                    local_notes = local_notes[:5]  # cap at 5 files
+                except Exception:
+                    pass
+
+                # Merge: DynamoDB sessions + local note files
+                all_prep_notes = []
+                for s in sessions:
+                    all_prep_notes.append(s)
+                for ln in local_notes:
+                    all_prep_notes.append(ln)
+
+                if not all_prep_notes:
                     self.root.after(0, self._prep_no_history, customer)
                     return
 
+                db_count = len(sessions)
+                file_count = len(local_notes)
                 self.root.after(0, lambda: self._prep_update_status(
-                    f"Found {len(sessions)} session(s). Generating prep brief..."))
-
+                    f"Found {db_count} session(s) + {file_count} note file(s). Generating prep brief..."))
                 self._prep_streaming_started = False
                 self._prep_md_streamer = MarkdownStreamer(self.ai_text)
 
                 def on_chunk(text):
                     self.root.after(0, self._prep_append_chunk, text)
 
-                generate_prep_summary(sessions, customer, on_chunk=on_chunk)
+                generate_prep_summary(all_prep_notes, customer, on_chunk=on_chunk)
 
                 self.root.after(0, self._prep_finish)
             except Exception as e:
