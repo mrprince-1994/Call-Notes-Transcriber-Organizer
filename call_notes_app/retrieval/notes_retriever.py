@@ -370,6 +370,39 @@ def _local_retrieval(question: str, file_index: list[dict], conversation_history
         },
     }
 
+    WEB_SEARCH_TOOL = {
+        "name": "web_search",
+        "description": "Search the web using DuckDuckGo. Use for current information, pricing, product details, competitor research, or anything not in the call notes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "Search query"}},
+            "required": ["query"],
+        },
+    }
+
+    AWS_DOCS_TOOL = {
+        "name": "aws_docs_search",
+        "description": "Search official AWS documentation. Use for AWS service details, features, best practices, limits, and technical guidance.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "AWS documentation search query"}},
+            "required": ["query"],
+        },
+    }
+
+    AWS_PRICING_TOOL = {
+        "name": "aws_pricing_lookup",
+        "description": "Look up AWS service pricing. Use when questions involve AWS costs, pricing comparisons, or service rates.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service_code": {"type": "string", "description": "AWS service code, e.g. 'AmazonEC2', 'AmazonS3', 'AWSLambda', 'AmazonBedrock'"},
+                "region": {"type": "string", "description": "AWS region, e.g. 'us-east-1'", "default": "us-east-1"},
+            },
+            "required": ["service_code"],
+        },
+    }
+
     file_map = {e["file_id"]: e for e in file_index}
 
     def _read(entry):
@@ -409,15 +442,19 @@ def _local_retrieval(question: str, file_index: list[dict], conversation_history
             "system": (
                 "You are an expert assistant that retrieves and synthesizes information "
                 "from historical customer call notes for an AWS account manager. "
-                "Use read_note_file to fetch files, then produce a comprehensive answer. "
+                "You also have access to web search, AWS documentation, and AWS pricing tools. "
+                "Use read_note_file to fetch call notes, web_search for current information or "
+                "competitor research, aws_docs_search for AWS service details and best practices, "
+                "and aws_pricing_lookup for AWS pricing information. "
                 "When asked for recent context on a customer, read ALL their notes and provide: "
                 "a customer overview, recent discussions (most recent first with key details), "
                 "outstanding action items with owners, recurring themes, and current status. "
-                "Always cite customer, source, filename, and date. Be thorough — read all "
-                "relevant files. If asked a specific question, answer it directly."
+                "Always cite customer, source, filename, and date for note references. Be thorough — read all "
+                "relevant files. If asked a specific question, answer it directly. "
+                "Use web search and AWS tools when the question goes beyond what's in the notes."
             ),
             "messages": conversation_history,
-            "tools": [READ_TOOL],
+            "tools": [READ_TOOL, WEB_SEARCH_TOOL, AWS_DOCS_TOOL, AWS_PRICING_TOOL],
         }
         resp = client.invoke_model_with_response_stream(
             modelId=OPUS_MODEL_ID,
@@ -463,20 +500,47 @@ def _local_retrieval(question: str, file_index: list[dict], conversation_history
 
         tool_results = []
         for tb in tool_blocks:
-            fid = tb.get("input", {}).get("file_id", "")
-            entry = file_map.get(fid)
-            content = (
-                f"=== {entry['customer']} | {entry['source']} | "
-                f"{entry['filename']} | {entry.get('date') or 'no date'} ===\n\n"
-                + _read(entry)
-            ) if entry else f"file_id '{fid}' not found."
+            tool_name = tb.get("name", "")
+            tool_input = tb.get("input", {})
+
+            if tool_name == "read_note_file":
+                fid = tool_input.get("file_id", "")
+                entry = file_map.get(fid)
+                content = (
+                    f"=== {entry['customer']} | {entry['source']} | "
+                    f"{entry['filename']} | {entry.get('date') or 'no date'} ===\n\n"
+                    + _read(entry)
+                ) if entry else f"file_id '{fid}' not found."
+                if on_chunk and entry:
+                    on_chunk(f"📂 Reading: {entry['filename']}\n\n")
+
+            elif tool_name == "web_search":
+                query = tool_input.get("query", "")
+                if on_chunk:
+                    on_chunk(f"🌐 Searching: {query}\n\n")
+                content = _execute_web_search(query)
+
+            elif tool_name == "aws_docs_search":
+                query = tool_input.get("query", "")
+                if on_chunk:
+                    on_chunk(f"🔍 AWS Docs: {query}\n\n")
+                content = _execute_aws_docs_search(query)
+
+            elif tool_name == "aws_pricing_lookup":
+                service_code = tool_input.get("service_code", "")
+                region = tool_input.get("region", "us-east-1")
+                if on_chunk:
+                    on_chunk(f"💰 AWS Pricing: {service_code}\n\n")
+                content = _execute_aws_pricing(service_code, region)
+
+            else:
+                content = f"Unknown tool: {tool_name}"
+
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tb["id"],
                 "content": content,
             })
-            if on_chunk:
-                on_chunk(f"📂 Reading: {entry['filename'] if entry else fid}\n\n")
 
         conversation_history.append({"role": "user", "content": tool_results})
 
@@ -634,6 +698,71 @@ def _execute_web_search(query: str) -> str:
         body = r.get("body", r.get("snippet", ""))
         parts.append(f"**{title}**\n{link}\n{body}")
     return f"Results for '{query}':\n\n" + "\n\n---\n\n".join(parts)
+
+
+def _execute_aws_docs_search(query: str) -> str:
+    """Search AWS documentation using the Bedrock docs API."""
+    try:
+        import urllib.request
+        import urllib.parse
+
+        # Use the AWS documentation search API
+        encoded = urllib.parse.quote_plus(query)
+        url = f"https://docs.aws.amazon.com/search/doc-search.html?searchQuery={encoded}&is498=true&searchPage=0&additionalFilters=%255B%255D"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "application/json",
+        })
+
+        # Fallback: use web search scoped to AWS docs
+        return _execute_web_search(f"site:docs.aws.amazon.com {query}")
+    except Exception as e:
+        return f"AWS docs search error: {e}"
+
+
+def _execute_aws_pricing(service_code: str, region: str = "us-east-1") -> str:
+    """Look up AWS pricing for a service using the Price List API."""
+    try:
+        pricing_client = boto3.client("pricing", region_name="us-east-1")
+
+        # Get products with a region filter
+        filters = [
+            {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        ]
+
+        resp = pricing_client.get_products(
+            ServiceCode=service_code,
+            Filters=filters,
+            MaxResults=10,
+        )
+
+        if not resp.get("PriceList"):
+            return f"No pricing data found for {service_code} in {region}."
+
+        parts = [f"AWS Pricing for {service_code} in {region}:\n"]
+        for price_json in resp["PriceList"][:5]:
+            price_data = json.loads(price_json) if isinstance(price_json, str) else price_json
+            product = price_data.get("product", {})
+            attrs = product.get("attributes", {})
+            terms = price_data.get("terms", {})
+
+            desc = attrs.get("usagetype", attrs.get("group", ""))
+            desc_detail = attrs.get("groupDescription", attrs.get("operation", ""))
+
+            # Extract on-demand pricing
+            on_demand = terms.get("OnDemand", {})
+            for _, term_data in on_demand.items():
+                for _, dim in term_data.get("priceDimensions", {}).items():
+                    price = dim.get("pricePerUnit", {}).get("USD", "N/A")
+                    unit = dim.get("unit", "")
+                    description = dim.get("description", desc_detail or desc)
+                    if price and price != "0.0000000000":
+                        parts.append(f"- {description}: ${price} per {unit}")
+
+        return "\n".join(parts) if len(parts) > 1 else f"No non-zero pricing found for {service_code} in {region}."
+
+    except Exception as e:
+        return f"AWS pricing lookup error: {e}. Try a different service code (e.g., 'AmazonEC2', 'AmazonS3', 'AWSLambda')."
 
 
 def ask_research_agent(

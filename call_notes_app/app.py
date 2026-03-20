@@ -1306,11 +1306,14 @@ class NotesRetrieverTab:
     def _update_session_list_ui(self):
         self._sh_listbox.delete(0, tk.END)
         for item in self._session_items:
-            icon = "📋" if item.get("session_type") == "retrieval" else "🌐"
-            ts = item.get("timestamp", "")[:16].replace("T", " ")
-            title = item.get("title", "—")[:28]
-            turns = item.get("turn_count", 0)
-            self._sh_listbox.insert(tk.END, f"{icon} {ts}\n{title}  ({turns}t)")
+            customer = item.get("customer", "").strip()
+            ts = item.get("timestamp", "")[:10]  # YYYY-MM-DD
+            title = item.get("title", "—")[:35]
+            if customer:
+                label = f"{customer} — {ts}"
+            else:
+                label = f"{title} — {ts}"
+            self._sh_listbox.insert(tk.END, label)
 
     def _on_session_select(self, event):
         sel = self._sh_listbox.curselection()
@@ -1380,6 +1383,8 @@ class NotesRetrieverTab:
         )
         title = first_user[:80]
         customer = self.customer_filter_var.get()
+        if customer == "(All)":
+            customer = ""
         source = self.source_filter_var.get()
 
         # Ensure conversation_history is JSON-serializable
