@@ -832,7 +832,7 @@ class CallNotesApp:
 
         def run():
             try:
-                # Get sessions from DynamoDB history
+                # Get sessions from local history
                 sessions = list_sessions(customer)[:3]
 
                 # Also scan local note files for this customer
@@ -859,7 +859,7 @@ class CallNotesApp:
                 except Exception:
                     pass
 
-                # Merge: DynamoDB sessions + local note files
+                # Merge: saved sessions + local note files
                 all_prep_notes = []
                 for s in sessions:
                     all_prep_notes.append(s)
@@ -1281,7 +1281,7 @@ class NotesRetrieverTab:
     # ── Session history ──
 
     def _init_history_table(self):
-        """Create DynamoDB table on first run (no-op if it already exists)."""
+        """Ensure local SQLite tables exist (no-op if they already exist)."""
         try:
             _ensure_table()
             self._sh_listbox.after(0, lambda: threading.Thread(
@@ -1369,7 +1369,7 @@ class NotesRetrieverTab:
         self.send_btn.configure(state=tk.NORMAL, text="Send ↵")
 
     def _save_current_session(self):
-        """Persist the current conversation to DynamoDB."""
+        """Persist the current conversation to local SQLite."""
         if not self._conversation_history:
             return
         # Derive a title from the first user message
@@ -2326,7 +2326,7 @@ class InsightsTab:
                 from botocore.config import Config
                 from config import AWS_REGION, CLAUDE_MODEL_ID
 
-                # Gather data from DynamoDB sessions
+                # Gather data from local session history
                 sessions = list_sessions()
                 session_summaries = []
                 for s in sessions[:30]:  # last 30 sessions

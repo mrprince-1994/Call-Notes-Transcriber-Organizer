@@ -2,7 +2,7 @@
 
 A Windows desktop application for customer-facing professionals that live-transcribes calls, generates structured notes, drafts follow-up emails directly into Outlook, and provides AI-powered research and retrieval across all your historical call notes.
 
-Built on AWS services: Amazon Transcribe, Amazon Bedrock (Claude), and DynamoDB.
+Built on AWS services: Amazon Transcribe and Amazon Bedrock (Claude). Session history and data are stored locally in SQLite.
 
 ---
 
@@ -17,7 +17,7 @@ Built on AWS services: Amazon Transcribe, Amazon Bedrock (Claude), and DynamoDB.
 - Copy transcript to clipboard
 - Export notes as DOCX or PDF
 - Auto-detect and answer AWS-related questions during calls via AI agent
-- Session history stored in DynamoDB with full transcript, notes, and email
+- Session history stored locally in SQLite with full transcript, notes, and email
 
 ### Tab 2: Notes Retrieval
 - Multi-turn chat interface to query across all your historical call notes
@@ -49,9 +49,9 @@ Built on AWS services: Amazon Transcribe, Amazon Bedrock (Claude), and DynamoDB.
 - Refresh button to update on demand
 
 ### Automated Features (run in background after each call)
-- Pre-Call Prep: click "📋 Pre-Call Prep" before a call to get a brief from DynamoDB history + local note files
+- Pre-Call Prep: click "📋 Pre-Call Prep" before a call to get a brief from local session history + note files
 - Smart Follow-Up Reminders: auto-creates Outlook To Do tasks from action items with due dates and priorities
-- Competitive Intel Extraction: auto-detects competitor mentions and stores in DynamoDB
+- Competitive Intel Extraction: auto-detects competitor mentions and stores locally in SQLite
 - Weekly Digest: sends a summary email every Monday at 8 AM via Windows Task Scheduler
 - Email Style Guide: analyzes your sent emails to personalize follow-up tone
 
@@ -64,14 +64,12 @@ Built on AWS services: Amazon Transcribe, Amazon Bedrock (Claude), and DynamoDB.
 - **AWS Account** with:
   - Amazon Transcribe (streaming access)
   - Amazon Bedrock with Claude model access (Sonnet 4.6 and Opus 4.6)
-  - DynamoDB (for session history — tables auto-created on first run)
 - **AWS CLI** configured with valid credentials (`aws configure`)
 - **VB-CABLE** virtual audio driver ([download](https://vb-audio.com/Cable/))
 - **Microsoft Outlook** (desktop app, for email draft feature)
 - **IAM Permissions**:
   - `transcribe:StartStreamTranscription`
   - `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`
-  - `dynamodb:PutItem`, `dynamodb:Query`, `dynamodb:Scan`, `dynamodb:DeleteItem`, `dynamodb:CreateTable`, `dynamodb:DescribeTable`
   - `bedrock-agentcore:*` (optional, only if deploying the AI Q&A agent)
 
 ---
@@ -90,7 +88,7 @@ python -m pip install -r requirements.txt
 | `sounddevice` | Audio capture from mic and virtual cable |
 | `numpy` | Audio buffer mixing and PCM conversion |
 | `amazon-transcribe` | Amazon Transcribe Streaming SDK |
-| `boto3` | AWS SDK for Bedrock and DynamoDB |
+| `boto3` | AWS SDK for Bedrock and Transcribe |
 | `python-docx` | Generating formatted .docx files (notes + briefs) |
 | `customtkinter` | Modern dark-themed UI framework |
 | `pywin32` | Outlook COM integration for email drafts |
@@ -116,17 +114,17 @@ Enter your Access Key ID, Secret Access Key, region (`us-east-1`), and output fo
 1. Go to the [Bedrock console](https://console.aws.amazon.com/bedrock/)
 2. Navigate to **Model access** → verify **Anthropic Claude** models are available
 
-### 3. DynamoDB Tables
+### 3. Local Database (SQLite)
 
-Two tables are used for session history. They are auto-created on first run:
+Session history is stored locally in `call_notes_app/call_notes.db` (auto-created on first run). Three tables are used:
 
 | Table | Purpose | Keys |
 |---|---|---|
-| `CallNotesHistory` | Stores transcripts, notes, and emails from Tab 1 | `customer_name` (PK), `timestamp` (SK) |
-| `ChatSessionHistory` | Stores chat sessions from Tabs 2 and 3 | `session_type` (PK), `timestamp` (SK) |
-| `CompetitiveIntel` | Stores competitor mentions extracted from notes | `competitor` (PK), `timestamp` (SK) |
+| `call_notes_history` | Stores transcripts, notes, and emails from Tab 1 | `customer_name` (PK), `timestamp` (SK) |
+| `chat_session_history` | Stores chat sessions from Tabs 2 and 3 | `session_type` (PK), `timestamp` (SK) |
+| `competitive_intel` | Stores competitor mentions extracted from notes | `competitor` (PK), `timestamp` (SK) |
 
-Both tables use 60-90 day TTL for automatic cleanup.
+No AWS permissions or network access needed for data storage.
 
 ---
 
@@ -164,7 +162,7 @@ The app opens with three tabs: Live Transcription, Notes Retrieval, and Customer
 5. Click **📨 Outlook Draft** to create the email in your Outlook Drafts folder (with your signature)
 6. Click **📋 Copy Transcript** to copy the raw transcript
 7. Click **📄 Export DOCX** or **📑 Export PDF** to save notes
-8. All sessions are saved to DynamoDB and appear in the History sidebar
+8. All sessions are saved locally and appear in the History sidebar
 
 ### Follow-Up Email
 
@@ -209,7 +207,7 @@ A multi-turn chat interface for querying your historical call notes.
 4. Type a question or click a suggested prompt
 5. Claude reads the relevant note files and synthesizes an answer
 6. Conversations are multi-turn — ask follow-ups in the same session
-7. Sessions auto-save to DynamoDB and can be restored from the History sidebar
+7. Sessions auto-save locally and can be restored from the History sidebar
 
 ---
 
@@ -259,7 +257,7 @@ A dashboard combining call analytics, competitive intelligence, and AI-powered t
 
 ### Trend Generation (right panel)
 1. Click "Generate Trends"
-2. Scans last 30 DynamoDB sessions + 20 local note files
+2. Scans last 30 saved sessions + 20 local note files
 3. Claude identifies 5-10 cross-cutting trends across all calls:
    - Common customer pain points
    - Recurring technology needs
@@ -278,7 +276,7 @@ To populate competitive intel from existing call notes:
 python backfill_insights.py
 ```
 
-This scans all DynamoDB sessions and extracts competitor mentions from each.
+This scans all saved sessions and extracts competitor mentions from each.
 
 ---
 
@@ -287,7 +285,7 @@ This scans all DynamoDB sessions and extracts competitor mentions from each.
 ### Pre-Call Prep
 1. Enter a customer name on the Live Transcription tab
 2. Click "📋 Pre-Call Prep" (right side of button row)
-3. Pulls last 3 DynamoDB sessions + local note files for that customer
+3. Pulls last 3 saved sessions + local note files for that customer
 4. Claude generates: last meeting recap, outstanding action items, open questions, promises made, suggested talking points
 5. Streams into the AI Answers panel
 
@@ -310,7 +308,7 @@ After every "Stop & Generate", the app automatically:
 After every "Stop & Generate", the app automatically:
 1. Sends notes to Claude to identify competitor mentions
 2. Extracts company name, context, and sentiment
-3. Stores in DynamoDB `CompetitiveIntel` table
+3. Stores locally in SQLite `competitive_intel` table
 4. Visible in the Insights tab
 
 ---
@@ -351,15 +349,15 @@ call_notes_app/
 │   ├── transcriber.py            # Audio capture + Amazon Transcribe Streaming
 │   ├── summarizer.py             # Notes + follow-up email + competitor/action extraction
 │   ├── storage.py                # DOCX conversion and file saving
-│   ├── history.py                # DynamoDB session persistence (CallNotesHistory)
+│   ├── history.py                # SQLite session persistence (call_notes.db)
 │   ├── question_detector.py      # AWS question detection in transcript
 │   ├── agent_client.py           # AI Q&A agent (AgentCore / local MCP / Bedrock)
-│   ├── competitive_intel.py      # DynamoDB competitive intelligence tracker
+│   ├── competitive_intel.py      # SQLite competitive intelligence tracker
 │   └── outlook_tasks.py          # Outlook To Do task creation from action items
 │
 ├── retrieval/                    # Tabs 2 & 3: Notes Retrieval + Customer Research
 │   ├── notes_retriever.py        # Note indexing, retrieval agent, research agent
-│   ├── chat_history.py           # DynamoDB chat session persistence (ChatSessionHistory)
+│   ├── chat_history.py           # SQLite chat session persistence (call_notes.db)
 │   └── customer_brief.py         # Customer brief generator (research + DOCX builder)
 │
 └── agentcore_agent/              # Deployable AgentCore agents
@@ -395,7 +393,7 @@ See [`agentcore_agent/README.md`](agentcore_agent/README.md) for deployment inst
 | Bedrock `AccessDeniedException` | Verify Claude models in Bedrock console; check IAM permissions |
 | Transcribe `InvalidClientTokenId` | Re-run `aws configure` with valid credentials |
 | Outlook draft fails | Ensure Outlook desktop app is running; install `pywin32` |
-| DynamoDB `ResourceNotFoundException` | Tables auto-create on first run; ensure DynamoDB permissions |
+| DynamoDB `ResourceNotFoundException` | No longer applicable — data is stored locally in SQLite |
 | Customer brief stuck on "Researching" | Normal — Claude research takes 30-60s; watch the animated progress |
 | Style guide empty | Run `python build_style_guide.py` with Outlook open and sent emails available |
 | App doesn't capture mic audio | Select correct mic in dropdown; both streams are mixed |

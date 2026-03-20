@@ -1,101 +1,86 @@
-"""DynamoDB-backed competitive intelligence tracker.
+"""SQLite-backed competitive intelligence tracker.
 
-Stores competitor mentions extracted from call notes.
+Stores competitor mentions extracted from call notes. All data stays local.
 """
-import boto3
+import os
+import sqlite3
 import time
 from datetime import datetime
-from botocore.exceptions import ClientError
-from config import AWS_REGION
 
-TABLE_NAME = "CompetitiveIntel"
-TTL_DAYS = 365  # keep for a year
+TTL_DAYS = 365
 
-_dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
-_table = None
+_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "call_notes.db")
+_conn = None
+
+
+def _get_conn() -> sqlite3.Connection:
+    global _conn
+    if _conn is None:
+        _conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        _conn.row_factory = sqlite3.Row
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS competitive_intel (
+                competitor TEXT NOT NULL,
+                timestamp  TEXT NOT NULL,
+                customer   TEXT DEFAULT '',
+                context    TEXT DEFAULT '',
+                sentiment  TEXT DEFAULT 'neutral',
+                expiry_ttl INTEGER,
+                PRIMARY KEY (competitor, timestamp)
+            )
+        """)
+        _conn.commit()
+    return _conn
 
 
 def _ensure_table():
-    """Create the DynamoDB table if it doesn't exist."""
-    global _table
-    client = boto3.client("dynamodb", region_name=AWS_REGION)
-    try:
-        client.describe_table(TableName=TABLE_NAME)
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "ResourceNotFoundException":
-            raise
-        client.create_table(
-            TableName=TABLE_NAME,
-            KeySchema=[
-                {"AttributeName": "competitor", "KeyType": "HASH"},
-                {"AttributeName": "timestamp", "KeyType": "RANGE"},
-            ],
-            AttributeDefinitions=[
-                {"AttributeName": "competitor", "AttributeType": "S"},
-                {"AttributeName": "timestamp", "AttributeType": "S"},
-            ],
-            BillingMode="PAY_PER_REQUEST",
-        )
-        waiter = client.get_waiter("table_exists")
-        waiter.wait(TableName=TABLE_NAME)
-        try:
-            client.update_time_to_live(
-                TableName=TABLE_NAME,
-                TimeToLiveSpecification={"Enabled": True, "AttributeName": "expiry_ttl"},
-            )
-        except Exception:
-            pass
-    _table = _dynamodb.Table(TABLE_NAME)
+    """No-op for SQLite — table is created on first connection."""
+    _get_conn()
 
 
 def save_competitor_mentions(customer_name: str, mentions: list):
-    """Save extracted competitor mentions to DynamoDB."""
-    global _table
-    if _table is None:
-        _ensure_table()
+    """Save extracted competitor mentions locally."""
+    conn = _get_conn()
     ts = datetime.now().isoformat()
     for m in mentions:
         competitor = m.get("competitor", "").strip()
         if not competitor:
             continue
-        _table.put_item(Item={
-            "competitor": competitor,
-            "timestamp": ts,
-            "customer": customer_name,
-            "context": m.get("context", ""),
-            "sentiment": m.get("sentiment", "neutral"),
-            "expiry_ttl": int(time.time()) + (TTL_DAYS * 86400),
-        })
+        conn.execute(
+            "INSERT OR REPLACE INTO competitive_intel "
+            "(competitor, timestamp, customer, context, sentiment, expiry_ttl) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (competitor, ts, customer_name, m.get("context", ""),
+             m.get("sentiment", "neutral"),
+             int(time.time()) + (TTL_DAYS * 86400)),
+        )
+    conn.commit()
 
 
 def get_all_mentions(limit=100) -> list:
     """Return all competitor mentions, sorted by most recent."""
-    global _table
-    if _table is None:
-        _ensure_table()
-    resp = _table.scan(Limit=limit)
-    items = resp.get("Items", [])
-    items.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-    return items
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM competitive_intel ORDER BY timestamp DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_mentions_by_competitor(competitor: str) -> list:
     """Return all mentions of a specific competitor."""
-    global _table
-    if _table is None:
-        _ensure_table()
-    resp = _table.query(
-        KeyConditionExpression=boto3.dynamodb.conditions.Key("competitor").eq(competitor),
-        ScanIndexForward=False,
-    )
-    return resp.get("Items", [])
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM competitive_intel WHERE competitor = ? ORDER BY timestamp DESC",
+        (competitor,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_competitor_summary() -> dict:
     """Return a summary: {competitor: count} sorted by frequency."""
-    items = get_all_mentions(limit=500)
-    counts = {}
-    for item in items:
-        comp = item.get("competitor", "")
-        counts[comp] = counts.get(comp, 0) + 1
-    return dict(sorted(counts.items(), key=lambda x: x[1], reverse=True))
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT competitor, COUNT(*) as cnt FROM competitive_intel GROUP BY competitor ORDER BY cnt DESC"
+    ).fetchall()
+    return {r["competitor"]: r["cnt"] for r in rows}

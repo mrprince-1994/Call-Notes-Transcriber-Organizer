@@ -1,6 +1,6 @@
-"""Backfill competitive intel from existing call notes in DynamoDB.
+"""Backfill competitive intel from existing call notes in local SQLite.
 
-Run once to populate the CompetitiveIntel table from historical sessions:
+Run once to populate the competitive_intel table from historical sessions:
     python backfill_insights.py
 """
 import sys

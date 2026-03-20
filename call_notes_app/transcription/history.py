@@ -1,28 +1,52 @@
-"""DynamoDB-backed session history for call notes."""
-import boto3
+"""SQLite-backed session history for call notes.
+
+All data stays local — no AWS credentials needed for storage.
+DB file lives alongside the app in call_notes_app/call_notes.db.
+"""
+import os
+import sqlite3
 import time
 from datetime import datetime
-from config import AWS_REGION
 
 TTL_DAYS = 60
 
-TABLE_NAME = "CallNotesHistory"
+_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "call_notes.db")
+_conn = None
 
-_dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
-_table = _dynamodb.Table(TABLE_NAME)
+
+def _get_conn() -> sqlite3.Connection:
+    global _conn
+    if _conn is None:
+        _conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        _conn.row_factory = sqlite3.Row
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS call_notes_history (
+                customer_name TEXT NOT NULL,
+                timestamp     TEXT NOT NULL,
+                transcript    TEXT,
+                notes         TEXT,
+                docx_path     TEXT,
+                followup_email TEXT DEFAULT '',
+                expiry_ttl    INTEGER,
+                PRIMARY KEY (customer_name, timestamp)
+            )
+        """)
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_history_ts ON call_notes_history(timestamp)")
+        _conn.commit()
+    return _conn
 
 
 def save_session(customer_name: str, transcript: str, notes: str, docx_path: str, followup_email: str = ""):
-    """Store a completed session in DynamoDB."""
-    _table.put_item(Item={
-        "customer_name": customer_name,
-        "timestamp": datetime.now().isoformat(),
-        "transcript": transcript,
-        "notes": notes,
-        "docx_path": docx_path,
-        "followup_email": followup_email,
-        "expiry_ttl": int(time.time()) + (TTL_DAYS * 86400),
-    })
+    """Store a completed session locally in SQLite."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO call_notes_history "
+        "(customer_name, timestamp, transcript, notes, docx_path, followup_email, expiry_ttl) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (customer_name, datetime.now().isoformat(), transcript, notes, docx_path,
+         followup_email, int(time.time()) + (TTL_DAYS * 86400)),
+    )
+    conn.commit()
 
 
 def list_sessions(customer_name: str = None) -> list:
@@ -30,22 +54,23 @@ def list_sessions(customer_name: str = None) -> list:
 
     Returns list of dicts sorted by timestamp descending.
     """
+    conn = _get_conn()
     if customer_name:
-        resp = _table.query(
-            KeyConditionExpression=boto3.dynamodb.conditions.Key("customer_name").eq(customer_name),
-            ScanIndexForward=False,
-        )
+        rows = conn.execute(
+            "SELECT * FROM call_notes_history WHERE customer_name = ? ORDER BY timestamp DESC",
+            (customer_name,),
+        ).fetchall()
     else:
-        resp = _table.scan()
-    items = resp.get("Items", [])
-    # For scan results, sort by timestamp descending
-    if not customer_name:
-        items.sort(key=lambda x: x["timestamp"], reverse=True)
-    return items
+        rows = conn.execute(
+            "SELECT * FROM call_notes_history ORDER BY timestamp DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_all_customers() -> list:
     """Return a sorted list of unique customer names."""
-    resp = _table.scan(ProjectionExpression="customer_name")
-    names = sorted(set(item["customer_name"] for item in resp.get("Items", [])))
-    return names
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT customer_name FROM call_notes_history ORDER BY customer_name"
+    ).fetchall()
+    return [r["customer_name"] for r in rows]

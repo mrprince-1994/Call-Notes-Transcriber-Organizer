@@ -8,3 +8,5 @@ call_notes_app/agentcore_agent/payload.json
 call_notes_app/agentcore_agent/test_invoke.py
 .bedrock_agentcore.yaml
 .bedrock_agentcore/
+*.db
+call_notes_app/launch_error.log

@@ -94,7 +94,6 @@ You need an AWS account with access to Amazon Transcribe and Amazon Bedrock.
 4. Attach these managed policies:
    - `AmazonTranscribeFullAccess`
    - `AmazonBedrockFullAccess`
-   - `AmazonDynamoDBFullAccess`
    - `AmazonBedrockAgentCoreFullAccess` (only needed if deploying the AI Q&A agent to AgentCore Runtime)
 5. Go to the user → **Security credentials** tab → **Create access key**
 6. Select **"Local code"** as the use case
@@ -378,7 +377,7 @@ See [`agentcore_agent/README.md`](agentcore_agent/README.md) for more details on
 | `agentcore invoke` quoting errors on Windows | Use no spaces in JSON: `agentcore invoke '{"prompt":"hello"}'` or assign to a PowerShell variable first |
 | AgentCore `AccessDeniedException` | Attach `AmazonBedrockAgentCoreFullAccess` policy to your IAM user (Step 6) |
 | Outlook draft fails | Ensure Outlook desktop app is running; verify `pywin32` with `python -c "import win32com.client"` |
-| DynamoDB `ResourceNotFoundException` | Tables auto-create on first run; ensure DynamoDB permissions (Step 17) |
+| DynamoDB `ResourceNotFoundException` | No longer applicable — data is stored locally in SQLite |
 | Customer brief stuck on "Researching" | Normal — Claude research takes 30-60s; watch the animated progress indicator |
 | Style guide empty or missing | Run `python build_style_guide.py` with Outlook open (Step 15) |
 | Email doesn't match my style | Re-run `python build_style_guide.py` to regenerate `style_guide.txt` |
@@ -420,17 +419,16 @@ python -c "import win32com.client; print('pywin32 OK')"
 
 ---
 
-## Step 17: Verify DynamoDB Access
+## Step 17: Local Database (SQLite)
 
-The app uses two DynamoDB tables for session history. They are auto-created on first run.
+The app stores all session history locally in `call_notes_app/call_notes.db`. This file is auto-created on first run — no setup needed.
 
-1. Verify your IAM user has DynamoDB permissions (see Step 6 — `AmazonDynamoDBFullAccess` or the specific permissions listed in the README)
-2. The tables created are:
-   - `CallNotesHistory` — stores transcripts, notes, and emails from the Live Transcription tab
-   - `ChatSessionHistory` — stores chat sessions from the Notes Retrieval and Customer Research tabs
-3. Both tables have TTL enabled for automatic cleanup (60-90 days)
+Three tables are used:
+   - `call_notes_history` — stores transcripts, notes, and emails from the Live Transcription tab
+   - `chat_session_history` — stores chat sessions from the Notes Retrieval and Customer Research tabs
+   - `competitive_intel` — stores competitor mentions extracted from notes
 
-If you see `ResourceNotFoundException` errors, the tables may not have finished creating. Wait a few seconds and try again.
+No AWS permissions are needed for data storage. All customer data stays on your machine.
 
 ---
 
@@ -459,7 +457,7 @@ The brief includes: company overview, financial snapshot, leadership bios, techn
 | Live Transcription | Copy transcript | Copy raw transcript to clipboard |
 | Live Transcription | Export DOCX/PDF | Save notes in document format |
 | Live Transcription | AI Q&A | Auto-detect and answer AWS questions during calls |
-| Live Transcription | Session history | All sessions saved to DynamoDB |
+| Live Transcription | Session history | All sessions saved locally in SQLite |
 | Notes Retrieval | Multi-turn chat | Query across all historical call notes |
 | Notes Retrieval | Multi-source indexing | Your notes + teammate folders |
 | Notes Retrieval | Customer filter | Searchable type-to-filter popup |
@@ -480,14 +478,14 @@ The brief includes: company overview, financial snapshot, leadership bios, techn
 
 ## Step 19: Backfill Competitive Intel (Optional)
 
-If you have existing call notes in DynamoDB, you can populate the Insights tab with historical competitor data:
+If you have existing call notes in your local database, you can populate the Insights tab with historical competitor data:
 
 ```bash
 cd call_notes_app
 python backfill_insights.py
 ```
 
-This scans all existing sessions, extracts competitor mentions using Claude, and stores them in the `CompetitiveIntel` DynamoDB table. Run once after initial setup.
+This scans all existing sessions, extracts competitor mentions using Claude, and stores them in the local `competitive_intel` SQLite table. Run once after initial setup.
 
 ---
 
