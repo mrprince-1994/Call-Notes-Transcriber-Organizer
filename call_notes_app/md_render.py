@@ -19,20 +19,21 @@ _link_counter = 0
 
 def configure_tags(text_widget):
     """Set up all the text tags on a ScrolledText widget."""
-    text_widget.tag_configure("h1", font=("Segoe UI Semibold", 14), foreground="#e5e7eb",
-                              spacing1=8, spacing3=4)
+    text_widget.tag_configure("h1", font=("Segoe UI Semibold", 15), foreground="#eef0f2",
+                              spacing1=6, spacing3=1)
     text_widget.tag_configure("h2", font=("Segoe UI Semibold", 12), foreground="#10a37f",
-                              spacing1=6, spacing3=3)
+                              spacing1=4, spacing3=1)
     text_widget.tag_configure("h3", font=("Segoe UI Semibold", 11), foreground="#6ee7b7",
-                              spacing1=4, spacing3=2)
-    text_widget.tag_configure("bold", font=("Segoe UI Semibold", 10), foreground="#f3f4f6")
+                              spacing1=3, spacing3=1)
+    text_widget.tag_configure("bold", font=("Segoe UI Semibold", 10), foreground="#eef0f2")
     text_widget.tag_configure("code", font=("Consolas", 10), foreground="#6ee7b7",
-                              background="#1a2332")
-    text_widget.tag_configure("bullet", foreground="#d1d5db", lmargin1=16, lmargin2=28,
-                              font=("Segoe UI", 10))
-    text_widget.tag_configure("body", foreground="#d1d5db", font=("Segoe UI", 10))
-    text_widget.tag_configure("hr", foreground="#374151", font=("Segoe UI", 6),
-                              spacing1=4, spacing3=4)
+                              background="#0f1a26")
+    text_widget.tag_configure("bullet", foreground="#c8ccd0", lmargin1=20, lmargin2=34,
+                              font=("Segoe UI", 10), spacing1=1, spacing3=1)
+    text_widget.tag_configure("body", foreground="#c8ccd0", font=("Segoe UI", 10),
+                              spacing1=0, spacing3=0)
+    text_widget.tag_configure("hr", foreground="#1f2937", font=("Segoe UI", 2),
+                              spacing1=3, spacing3=3)
     text_widget.tag_configure("link", foreground="#60a5fa", font=("Segoe UI", 10),
                               underline=True)
     # Change cursor to hand when hovering over links
@@ -58,6 +59,11 @@ class MarkdownStreamer:
     def feed(self, chunk: str):
         """Feed a streaming chunk. Renders complete lines immediately."""
         self._buffer += chunk
+
+        # Pre-process buffer: force inline bullets onto separate lines
+        self._buffer = re.sub(r'(?<!\n)\s+•\s+', '\n- ', self._buffer)
+        self._buffer = re.sub(r'(?<!\n)\s{2,}-\s+', '\n- ', self._buffer)
+
         # Process all complete lines (ending with \n)
         while "\n" in self._buffer:
             idx = self._buffer.index("\n")
@@ -68,13 +74,24 @@ class MarkdownStreamer:
     def flush(self):
         """Render any remaining buffered text."""
         if self._buffer:
-            self._render_line(self._buffer)
-            self._buffer = ""
+            self._buffer = re.sub(r'\s+•\s+', '\n- ', self._buffer)
+            self._buffer = re.sub(r'\s{2,}-\s+', '\n- ', self._buffer)
+            while "\n" in self._buffer:
+                idx = self._buffer.index("\n")
+                line = self._buffer[:idx]
+                self._buffer = self._buffer[idx + 1:]
+                self._render_line(line)
+            if self._buffer:
+                self._render_line(self._buffer)
+                self._buffer = ""
 
     def _render_line(self, line: str):
         """Render a single line with markdown formatting."""
         w = self._widget
         stripped = line.strip()
+
+        # DEBUG: uncomment to see what lines are being rendered
+        # print(f"[md_render] LINE: {repr(stripped[:120])}")
 
         # Horizontal rule
         if stripped and all(c == "-" for c in stripped) and len(stripped) >= 3:
@@ -116,10 +133,22 @@ class MarkdownStreamer:
             w.insert(tk.END, "\n", "bullet")
             return
 
-        # Empty line = paragraph break
+        # Empty line = small paragraph break (not a full blank line)
         if not stripped:
-            w.insert(tk.END, "\n", "body")
             return
+
+        # Detect inline bullets: text containing " • " that should be separate lines
+        # This handles cases where Claude outputs "• item1  • item2  • item3" inline
+        if "•" in stripped or "  - " in stripped:
+            # Split on bullet markers
+            parts = re.split(r"\s*[•]\s*|\s{2,}-\s+", stripped)
+            parts = [p.strip() for p in parts if p.strip()]
+            if len(parts) > 1:
+                for part in parts:
+                    w.insert(tk.END, "  •  ", "bullet")
+                    _insert_inline(w, part, "bullet")
+                    w.insert(tk.END, "\n", "bullet")
+                return
 
         # Regular text with inline formatting
         _insert_inline(w, line, "body")

@@ -38,9 +38,35 @@ def _customer_from_filename(fname: str) -> str | None:
     return m.group(1).split(" - ")[0].strip() or None
 
 
-def _date_from_sa_filename(fname: str) -> str:
+def _date_from_sa_filename(fname: str, filepath: str = "") -> str:
+    """Extract a sortable date string from a filename.
+
+    For [MM_DD] patterns (no year), infer the year from the file's last-modified time.
+    If that would produce a future date, use the previous year instead.
+    Returns YYYY-MM-DD when possible, or MM-DD as fallback.
+    """
     m = re.match(r"^\[(\d{2})_(\d{2})\]", fname)
-    return f"{m.group(1)}-{m.group(2)}" if m else ""
+    if m:
+        month, day = m.group(1), m.group(2)
+        if filepath and os.path.isfile(filepath):
+            try:
+                mtime = os.path.getmtime(filepath)
+                file_dt = datetime.fromtimestamp(mtime)
+                year = file_dt.year
+                # Build the candidate date
+                try:
+                    candidate = datetime(year, int(month), int(day))
+                except ValueError:
+                    return f"{month}-{day}"
+                # If the candidate is after the file's mod time, the meeting
+                # must have been the previous year (file was synced later)
+                if candidate > file_dt:
+                    year -= 1
+                return f"{year}-{month}-{day}"
+            except OSError:
+                pass
+        return f"{month}-{day}"
+    return ""
 
 
 # ── Customer deduplication ─────────────────────────────────────────────────────
@@ -205,7 +231,7 @@ def scan_notes(sources: list[tuple[str, str]] | None = None) -> list[dict]:
                 rel = os.path.relpath(root, base_dir)
 
                 customer = _customer_from_filename(fname)
-                date_str = _date_from_sa_filename(fname) if customer else ""
+                date_str = _date_from_sa_filename(fname, full_path) if customer else ""
 
                 if not customer:
                     parts = rel.replace("\\", "/").split("/")
@@ -214,6 +240,20 @@ def scan_notes(sources: list[tuple[str, str]] | None = None) -> list[dict]:
                         if len(p) == 10 and p.count("-") == 2:
                             date_str = p
                             break
+
+                # Fallback: extract YYYY-MM-DD from anywhere in the filename
+                if not date_str or len(date_str) < 10:
+                    dm = re.search(r"(\d{4}-\d{2}-\d{2})", fname)
+                    if dm:
+                        date_str = dm.group(1)
+
+                # Last resort: use file modification time
+                if not date_str:
+                    try:
+                        mtime = os.path.getmtime(full_path)
+                        date_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+                    except OSError:
+                        pass
 
                 notes.append({
                     "customer": customer,
@@ -228,7 +268,7 @@ def scan_notes(sources: list[tuple[str, str]] | None = None) -> list[dict]:
 # ── Index helpers ──────────────────────────────────────────────────────────────
 
 def _build_file_index(notes_meta: list[dict], question: str = "") -> list[dict]:
-    """Sort by relevance and return a serialisable index list (no filepath for remote)."""
+    """Sort by relevance (customer match first) then by date (newest first)."""
     q_lower = question.lower()
     q_words = set(w for w in q_lower.split() if len(w) > 3)
 
@@ -240,7 +280,16 @@ def _build_file_index(notes_meta: list[dict], question: str = "") -> list[dict]:
             return 1
         return 2
 
-    sorted_notes = sorted(notes_meta, key=_relevance)[:200]
+    def _sort_key(n):
+        # Primary: relevance tier. Secondary: date descending (newest first).
+        # Dates are YYYY-MM-DD strings; missing/short dates sort last.
+        date = n.get("date", "")
+        # Invert date for descending sort: newer dates → smaller sort key
+        date_key = "" if len(date) >= 10 else "z"  # full dates first
+        inv_date = date if len(date) >= 10 else date
+        return (_relevance(n), date_key, "" if not inv_date else chr(0), -_date_to_ordinal(inv_date))
+
+    sorted_notes = sorted(notes_meta, key=lambda n: (_relevance(n), -_date_to_ordinal(n.get("date", ""))))[:200]
     return [
         {
             "file_id":  f"file_{i}",
@@ -248,10 +297,25 @@ def _build_file_index(notes_meta: list[dict], question: str = "") -> list[dict]:
             "source":   n.get("source", "?"),
             "filename": n["filename"],
             "date":     n.get("date", ""),
-            "filepath": n["filepath"],   # needed by local fallback & agent on same machine
+            "filepath": n["filepath"],
         }
         for i, n in enumerate(sorted_notes)
     ]
+
+
+def _date_to_ordinal(date_str: str) -> int:
+    """Convert a date string to an ordinal for sorting. Returns 0 for unparseable dates."""
+    if not date_str:
+        return 0
+    try:
+        if len(date_str) >= 10:
+            return datetime.strptime(date_str[:10], "%Y-%m-%d").toordinal()
+        elif len(date_str) >= 5:
+            # MM-DD without year — treat as current year
+            return datetime.strptime(f"2026-{date_str[:5]}", "%Y-%m-%d").toordinal()
+    except ValueError:
+        pass
+    return 0
 
 
 # ── AgentCore invocation (streaming SSE) ───────────────────────────────────────
@@ -455,8 +519,16 @@ def _local_retrieval(question: str, file_index: list[dict], conversation_history
                 "- Questions about AWS pricing, costs → aws_pricing_lookup\n"
                 "- Questions about companies, competitors, news → web_search\n"
                 "- Complex questions may need multiple tools — use them in combination.\n\n"
+                "CRITICAL — RECENCY RULES:\n"
+                "- The file index is sorted with the MOST RECENT files first (by date).\n"
+                "- ALWAYS read the most recent file for a customer FIRST.\n"
+                "- When summarizing a customer's status, lead with the most recent engagement.\n"
+                "- Present information in reverse chronological order (newest first).\n"
+                "- If there are multiple notes for the same customer, read them newest-to-oldest.\n"
+                "- Clearly label each engagement with its date so the reader knows the timeline.\n\n"
                 "When reading notes: cite customer, source, filename, and date. Be thorough — read all "
-                "relevant files. When asked for customer context, read ALL their notes."
+                "relevant files, starting with the most recent. When asked for customer context, "
+                "read ALL their notes but present the most recent status first."
             ),
             "messages": conversation_history,
             "tools": [READ_TOOL, WEB_SEARCH_TOOL, AWS_DOCS_TOOL, AWS_PRICING_TOOL],

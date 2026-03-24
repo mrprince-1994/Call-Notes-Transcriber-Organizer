@@ -181,36 +181,110 @@ def generate_followup_email(transcript: str, customer_name: str, on_chunk=None) 
 
     return "".join(full_text)
 
+
+def extract_debrief(notes: str, customer_name: str) -> dict:
+    """Analyze call notes and return auto-filled debrief fields."""
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=AWS_REGION,
+        config=Config(read_timeout=120),
+    )
+
+    payload = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1000,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"""Analyze these call notes for {customer_name} and return a JSON object with exactly three fields.
+Be concise — each field should be 1-2 sentences max.
+
+Return ONLY valid JSON:
+{{
+  "went_well": "The most positive signal from this call — what went right, what momentum exists, what the customer responded well to",
+  "risk": "The biggest risk or concern — competitive threat, budget uncertainty, timeline pressure, missing stakeholder, stalled decision, or 'No significant risks identified' if genuinely none",
+  "next_step": "The single highest-priority next action — who needs to do what by when"
+}}
+
+Call Notes:
+{notes}""",
+            }
+        ],
+    }
+
+    response = client.invoke_model(
+        modelId=CLAUDE_MODEL_ID,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps(payload),
+    )
+
+    body = json.loads(response["body"].read())
+    text = body["content"][0]["text"]
+
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0]
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0]
+
+    return json.loads(text.strip())
+
+
 PREP_SYSTEM_PROMPT = """You are a sales productivity assistant preparing a pre-call brief.
 Given notes from previous calls with a customer, produce a concise prep summary that helps
 the salesperson walk into their next call fully prepared.
 
-Structure the brief as follows:
+Structure the brief using markdown formatting as follows:
 
-LAST MEETING RECAP
+## Last Meeting Recap
 A 2-3 sentence summary of the most recent call — what was discussed and the overall status.
 
-WHERE WE LEFT OFF
+## Where We Left Off
 The key topics, decisions, and direction from the last interaction. What was the customer's
 state of mind? What were they excited about or concerned about?
+Use bullet points for each key topic.
 
-OUTSTANDING ACTION ITEMS
+## Outstanding Action Items
 List every action item that was committed to (by either side) that may still be open.
-Include the owner and any deadlines mentioned. Flag items that are overdue.
+Use bullet points. Include the owner and any deadlines mentioned. Flag items that are overdue.
 
-OPEN QUESTIONS
-Anything that was raised but not resolved, or that needs follow-up.
+## Open Questions
+Anything that was raised but not resolved, or that needs follow-up. Use bullet points.
 
-PROMISES MADE
+## Promises Made
 Anything you or your team committed to delivering — demos, documents, introductions,
-follow-up meetings, etc.
+follow-up meetings, etc. Use bullet points.
 
-SUGGESTED TALKING POINTS
-Based on the history, suggest 3-5 things to bring up or ask about in the upcoming call.
+## Suggested Talking Points
+Based on the history, suggest 3-5 things to bring up or ask about
+in the upcoming call. Use a numbered list.
 
-Keep it scannable — use short bullets, not paragraphs. This should be a 60-second read
-that gets someone fully up to speed. Do NOT use markdown formatting (no **, ##, etc.).
-Use plain text with dashes for bullets."""
+FORMATTING RULES:
+- Use ## for section headers — ALWAYS put a blank line after each header before the content
+- Use - for bullet points — EACH bullet MUST be on its own separate line
+- Never put body text on the same line as a ## header
+- Use **bold** for names, dates, and key terms that should stand out
+- Use numbered lists (1. 2. 3.) for the talking points, each on its own line
+- Keep bullets concise — one item per line, not run-on sentences
+- Add a blank line between sections for readability
+- Add a blank line between the last bullet and the next section header
+- This should be a 60-second read that gets someone fully up to speed
+
+EXAMPLE FORMAT:
+## Last Meeting Recap
+
+On **March 23, 2026**, met with **Neil** and **Carlos** to discuss the Shopify migration timeline.
+
+## Outstanding Action Items
+
+- **Jamie (AWS)** — Share Tyler's resources with Dexter — *deadline: ASAP*
+- **Carlos (BE)** — Update architecture diagram — *deadline: before April 9th*
+- **Michael (AWS)** — Pass CDN context to Liz Redding — *post-call*
+
+## Suggested Talking Points
+
+1. Ask about the OpenSearch serverless re-migration timeline
+2. Confirm Rajeev's availability for the GenAI deep-dive"""
 
 
 def generate_prep_summary(notes_list: list, customer_name: str, on_chunk=None) -> str:
@@ -219,6 +293,8 @@ def generate_prep_summary(notes_list: list, customer_name: str, on_chunk=None) -
         f"Session from {n.get('timestamp', 'unknown')[:16]}:\n{n.get('notes', '')}"
         for n in notes_list
     )
+
+    user_content = f"Customer: {customer_name}\n\nPrevious call notes (most recent first):\n\n{combined}"
 
     client = boto3.client(
         "bedrock-runtime",
@@ -233,7 +309,7 @@ def generate_prep_summary(notes_list: list, customer_name: str, on_chunk=None) -
         "messages": [
             {
                 "role": "user",
-                "content": f"Customer: {customer_name}\n\nPrevious call notes (most recent first):\n\n{combined}",
+                "content": user_content,
             }
         ],
     }

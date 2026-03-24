@@ -4,29 +4,29 @@ from tkinter import messagebox, filedialog
 import customtkinter as ctk
 import threading
 from transcription.transcriber import LiveTranscriber
-from transcription.summarizer import generate_notes, generate_followup_email, generate_prep_summary, extract_competitors, extract_action_items
+from transcription.summarizer import generate_notes, generate_followup_email, generate_prep_summary, extract_competitors, extract_action_items, extract_debrief
 from transcription.storage import save_notes, _md_to_docx
 from transcription.history import save_session, list_sessions, get_all_customers
 from transcription.competitive_intel import save_competitor_mentions
 from transcription.outlook_tasks import create_outlook_tasks
 from transcription.sift_insight import queue_sift_insight
 from transcription.activity_logger import queue_activity
-from transcription.question_detector import is_aws_aiml_question, extract_question
-from transcription.agent_client import ask_agent, warmup as warmup_agent, shutdown as shutdown_agent
+from transcription.agent_client import warmup as warmup_agent, shutdown as shutdown_agent
 from md_render import configure_tags, MarkdownStreamer
 from retrieval.notes_retriever import scan_notes, ask_notes_agent, ask_research_agent, NOTE_SOURCES, dedupe_customers
 from retrieval.chat_history import save_chat_session, list_chat_sessions, load_chat_session, delete_chat_session, _ensure_table
 
 # --- Color Palette (modern chat UI) ---
-BG_DARK = "#0d0d0d"        # App background
-BG_PANEL = "#171717"        # Panel/card backgrounds
-BG_INPUT = "#1e1e1e"        # Input fields, text areas
-BG_CARD = "#212121"         # Elevated cards, hover states
-FG_TEXT = "#d1d5db"         # Body text
-FG_DIM = "#6b7280"          # Secondary/muted text
-FG_BRIGHT = "#f3f4f6"       # Headings, emphasis
-ACCENT = "#10a37f"          # Primary accent (green, ChatGPT-like)
+BG_DARK = "#0a0a0a"        # App background — deeper black
+BG_PANEL = "#111111"        # Panel/card backgrounds
+BG_INPUT = "#161616"        # Input fields, text areas
+BG_CARD = "#1a1a1a"         # Elevated cards, hover states
+FG_TEXT = "#c8ccd0"         # Body text
+FG_DIM = "#5a6270"          # Secondary/muted text
+FG_BRIGHT = "#eef0f2"       # Headings, emphasis
+ACCENT = "#10a37f"          # Primary accent green
 ACCENT_HOVER = "#0d8c6d"    # Accent hover
+ACCENT_GLOW = "#10a37f"     # Border glow color
 GREEN = "#10a37f"           # Start/action buttons
 GREEN_HOVER = "#0d8c6d"
 RED = "#ef4444"             # Stop/delete
@@ -34,9 +34,10 @@ RED_HOVER = "#dc2626"
 ORANGE = "#f59e0b"          # Status/warning
 YELLOW = "#10a37f"          # Send button (matches accent)
 YELLOW_HOVER = "#0d8c6d"
-BORDER = "#2d2d2d"          # Subtle borders
-USER_BUBBLE = "#2b2b2b"     # User message background
-ASST_BUBBLE = "#171717"     # Assistant message background
+BORDER = "#1f2937"          # Subtle borders — slightly blue-tinted
+BORDER_ACCENT = "#10a37f40" # Semi-transparent accent for card borders
+USER_BUBBLE = "#1a1a1a"     # User message background
+ASST_BUBBLE = "#111111"     # Assistant message background
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -46,20 +47,20 @@ class StyledText(tk.Text):
     """Modern dark-themed tk.Text with a CTk scrollbar, wrapped in a rounded frame."""
 
     def __init__(self, master, **kwargs):
-        self._outer = ctk.CTkFrame(master, fg_color=BG_INPUT, corner_radius=12,
+        self._outer = ctk.CTkFrame(master, fg_color=BG_INPUT, corner_radius=14,
                                     border_width=1, border_color=BORDER)
-        # Default font, but allow caller to override
         if 'font' not in kwargs:
             kwargs['font'] = ("Segoe UI", 10)
         super().__init__(self._outer, wrap=tk.WORD, bg=BG_INPUT, fg=FG_TEXT,
                          insertbackground=FG_BRIGHT, borderwidth=0, highlightthickness=0,
-                         padx=14, pady=10, selectbackground=ACCENT,
+                         padx=16, pady=12, selectbackground=ACCENT,
                          selectforeground=BG_DARK, state=tk.DISABLED, **kwargs)
         sb = ctk.CTkScrollbar(self._outer, command=self.yview, fg_color=BG_INPUT,
-                               button_color="#3a3a3a", button_hover_color=ACCENT)
+                               button_color="#2a2a2a", button_hover_color=ACCENT,
+                               width=8)
         self.configure(yscrollcommand=sb.set)
         super().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 2), pady=4)
+        sb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 3), pady=6)
 
     def pack(self, **kw):
         self._outer.pack(**kw)
@@ -85,6 +86,8 @@ class CallNotesApp:
         self._current_email = ""
         self._ai_enabled = True
         self._pending_questions = set()
+        self._generating = False
+        self._locked_customer = ""
         self._build_ui()
         self._load_devices()
 
@@ -111,7 +114,7 @@ class CallNotesApp:
 
         # 3-column layout
         cols = ctk.CTkFrame(self.root, fg_color="transparent")
-        cols.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
+        cols.pack(fill=tk.BOTH, expand=True, padx=14, pady=10)
         cols.columnconfigure(1, weight=3)
         cols.columnconfigure(2, weight=2)
         cols.rowconfigure(0, weight=1)
@@ -131,13 +134,13 @@ class CallNotesApp:
         self.root.after(500, self._refresh_history)
     # ── Left: History ──
     def _build_history_panel(self, parent):
-        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=14,
                              border_width=1, border_color=BORDER)
-        card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
         ctk.CTkLabel(card, text="📋  History",
                      font=ctk.CTkFont("Segoe UI", 13, "bold"),
-                     text_color=ACCENT).pack(anchor=tk.W, padx=14, pady=(14, 8))
+                     text_color=FG_BRIGHT).pack(anchor=tk.W, padx=14, pady=(14, 8))
 
         filt = ctk.CTkFrame(card, fg_color="transparent")
         filt.pack(fill=tk.X, padx=12, pady=(0, 8))
@@ -157,23 +160,23 @@ class CallNotesApp:
                       font=ctk.CTkFont("Segoe UI", 13),
                       command=self._refresh_history).pack(side=tk.LEFT)
 
-        lf = ctk.CTkFrame(card, fg_color=BG_INPUT, corner_radius=8,
+        lf = ctk.CTkFrame(card, fg_color=BG_INPUT, corner_radius=10,
                            border_width=1, border_color=BORDER)
         lf.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
         self.history_list = tk.Listbox(
             lf, exportselection=False, bg=BG_INPUT, fg=FG_TEXT,
             selectbackground=ACCENT, selectforeground=BG_DARK,
             font=("Segoe UI", 10), borderwidth=0, highlightthickness=0,
-            activestyle="none")
+            activestyle="none", relief="flat")
         self.history_list.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.history_list.bind("<<ListboxSelect>>", self._on_history_select)
         self._history_items = []
 
     # ── Center: Controls + Transcript + Notes ──
     def _build_center_panel(self, parent):
-        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=14,
                              border_width=1, border_color=BORDER)
-        card.grid(row=0, column=1, sticky="nsew", padx=8)
+        card.grid(row=0, column=1, sticky="nsew", padx=6)
 
         # Controls grid
         ctrl = ctk.CTkFrame(card, fg_color="transparent")
@@ -211,66 +214,73 @@ class CallNotesApp:
             else:
                 self.mic_device_combo = combo
 
-        # Buttons
-        bf = ctk.CTkFrame(card, fg_color="transparent")
-        bf.pack(fill=tk.X, padx=16, pady=(4, 10))
+        # Buttons — Row 1: Recording controls
+        row1 = ctk.CTkFrame(card, fg_color="transparent")
+        row1.pack(fill=tk.X, padx=16, pady=(4, 4))
 
         self.start_btn = ctk.CTkButton(
-            bf, text="▶  Start Recording", fg_color=GREEN, hover_color=GREEN_HOVER,
+            row1, text="▶  Start Recording", fg_color=GREEN, hover_color=GREEN_HOVER,
             text_color=BG_DARK, font=ctk.CTkFont("Segoe UI", 12, "bold"),
-            corner_radius=8, height=36, command=self._start)
+            corner_radius=10, height=38, command=self._start)
         self.start_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         self.stop_btn = ctk.CTkButton(
-            bf, text="⏹  Stop & Generate", fg_color=RED, hover_color=RED_HOVER,
+            row1, text="⏹  Stop & Generate", fg_color=RED, hover_color=RED_HOVER,
             text_color=BG_DARK, font=ctk.CTkFont("Segoe UI", 12, "bold"),
-            corner_radius=8, height=36, state=tk.DISABLED, command=self._stop)
+            corner_radius=10, height=38, state=tk.DISABLED, command=self._stop)
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 16))
 
-        self.export_docx_btn = ctk.CTkButton(
-            bf, text="📄 Export DOCX", fg_color=BG_INPUT, hover_color=BG_CARD,
-            text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11), corner_radius=8,
-            height=34, border_width=1, border_color=BORDER, state=tk.DISABLED,
-            command=self._export_docx)
-        self.export_docx_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.export_pdf_btn = ctk.CTkButton(
-            bf, text="📑 Export PDF", fg_color=BG_INPUT, hover_color=BG_CARD,
-            text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11), corner_radius=8,
-            height=34, border_width=1, border_color=BORDER, state=tk.DISABLED,
-            command=self._export_pdf)
-        self.export_pdf_btn.pack(side=tk.LEFT)
-
-        self.sift_btn = ctk.CTkButton(
-            bf, text="📊 Queue SIFT", fg_color=BG_INPUT, hover_color=BG_CARD,
-            text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11), corner_radius=8,
-            height=34, border_width=1, border_color=BORDER, state=tk.DISABLED,
-            command=self._submit_sift)
-        self.sift_btn.pack(side=tk.LEFT, padx=(6, 0))
-
-        self.activity_btn = ctk.CTkButton(
-            bf, text="📝 Queue Activity", fg_color=BG_INPUT, hover_color=BG_CARD,
-            text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11), corner_radius=8,
-            height=34, border_width=1, border_color=BORDER, state=tk.DISABLED,
-            command=self._log_activity)
-        self.activity_btn.pack(side=tk.LEFT, padx=(6, 0))
-
         self.prep_btn = ctk.CTkButton(
-            bf, text="📋 Pre-Call Prep", fg_color=BG_INPUT, hover_color=BG_CARD,
-            text_color=ACCENT, font=ctk.CTkFont("Segoe UI", 11, "bold"), corner_radius=8,
-            height=34, border_width=1, border_color=ACCENT,
+            row1, text="📋 Pre-Call Prep", fg_color=BG_INPUT, hover_color=BG_CARD,
+            text_color=ACCENT, font=ctk.CTkFont("Segoe UI", 11, "bold"), corner_radius=10,
+            height=36, border_width=1, border_color=ACCENT,
             command=self._generate_prep)
         self.prep_btn.pack(side=tk.RIGHT)
+
+        # Buttons — Row 2: Post-call actions
+        row2 = ctk.CTkFrame(card, fg_color="transparent")
+        row2.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        ctk.CTkLabel(row2, text="Post-call:", text_color=FG_DIM,
+                     font=ctk.CTkFont("Segoe UI", 10)).pack(side=tk.LEFT, padx=(0, 6))
+
+        self.export_docx_btn = ctk.CTkButton(
+            row2, text="📄 DOCX", fg_color="#1f2937", hover_color=ACCENT,
+            text_color=FG_BRIGHT, font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+            height=30, width=70, border_width=1, border_color="#374151", state=tk.DISABLED,
+            command=self._export_docx)
+        self.export_docx_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.export_pdf_btn = ctk.CTkButton(
+            row2, text="📑 PDF", fg_color="#1f2937", hover_color=ACCENT,
+            text_color=FG_BRIGHT, font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+            height=30, width=60, border_width=1, border_color="#374151", state=tk.DISABLED,
+            command=self._export_pdf)
+        self.export_pdf_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.sift_btn = ctk.CTkButton(
+            row2, text="📊 SIFT", fg_color="#1f2937", hover_color=ACCENT,
+            text_color=FG_BRIGHT, font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+            height=30, width=65, border_width=1, border_color="#374151", state=tk.DISABLED,
+            command=self._submit_sift)
+        self.sift_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.activity_btn = ctk.CTkButton(
+            row2, text="📝 Activity", fg_color="#1f2937", hover_color=ACCENT,
+            text_color=FG_BRIGHT, font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+            height=30, width=80, border_width=1, border_color="#374151", state=tk.DISABLED,
+            command=self._log_activity)
+        self.activity_btn.pack(side=tk.LEFT)
 
         # Transcript
         transcript_header = ctk.CTkFrame(card, fg_color="transparent")
         transcript_header.pack(fill=tk.X, padx=16, pady=(4, 4))
-        ctk.CTkLabel(transcript_header, text="Live Transcript",
-                     font=ctk.CTkFont("Segoe UI", 12, "bold"),
-                     text_color=ACCENT).pack(side=tk.LEFT)
+        ctk.CTkLabel(transcript_header, text="🎙  Live Transcript",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=FG_BRIGHT).pack(side=tk.LEFT)
         self.copy_transcript_btn = ctk.CTkButton(
             transcript_header, text="📋 Copy Transcript", width=130, height=28,
-            fg_color=BG_INPUT, hover_color=BG_CARD, text_color=FG_TEXT,
+            fg_color="#1f2937", hover_color=ACCENT, text_color=FG_BRIGHT,
             font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
             border_width=1, border_color=BORDER, state=tk.DISABLED,
             command=self._copy_transcript)
@@ -279,9 +289,9 @@ class CallNotesApp:
         self.transcript_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
 
         # Notes
-        ctk.CTkLabel(card, text="Generated Notes",
-                     font=ctk.CTkFont("Segoe UI", 12, "bold"),
-                     text_color=ACCENT).pack(anchor=tk.W, padx=16, pady=(2, 4))
+        ctk.CTkLabel(card, text="📝  Generated Notes",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=FG_BRIGHT).pack(anchor=tk.W, padx=16, pady=(2, 4))
         self.notes_text = StyledText(card, height=8)
         self.notes_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
 
@@ -289,11 +299,11 @@ class CallNotesApp:
         email_header = ctk.CTkFrame(card, fg_color="transparent")
         email_header.pack(fill=tk.X, padx=16, pady=(2, 4))
         ctk.CTkLabel(email_header, text="📧  Follow-Up Email",
-                     font=ctk.CTkFont("Segoe UI", 12, "bold"),
-                     text_color=ACCENT).pack(side=tk.LEFT)
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=FG_BRIGHT).pack(side=tk.LEFT)
         self.outlook_draft_btn = ctk.CTkButton(
             email_header, text="📨 Outlook Draft", width=120, height=28,
-            fg_color=BG_INPUT, hover_color=BG_CARD, text_color=FG_TEXT,
+            fg_color="#1f2937", hover_color=ACCENT, text_color=FG_BRIGHT,
             font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
             border_width=1, border_color=BORDER, state=tk.DISABLED,
             command=self._send_to_outlook_draft)
@@ -302,49 +312,70 @@ class CallNotesApp:
         self.email_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
 
-    # ── Right: AI Answers ──
+    # ── Right: Call Intelligence Panel ──
     def _build_ai_panel(self, parent):
-        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=14,
                              border_width=1, border_color=BORDER)
-        card.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
+        card.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
 
-        ctk.CTkLabel(card, text="🤖  AI Answers",
-                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
-                     text_color=YELLOW).pack(anchor=tk.W, padx=14, pady=(14, 8))
-
+        # Header with clear button
         top = ctk.CTkFrame(card, fg_color="transparent")
-        top.pack(fill=tk.X, padx=12, pady=(0, 6))
-
-        self.ai_toggle_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(top, text="Auto-detect questions",
-                        variable=self.ai_toggle_var, command=self._toggle_ai,
-                        fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                        text_color=FG_TEXT, font=ctk.CTkFont("Segoe UI", 11)
-                        ).pack(side=tk.LEFT)
+        top.pack(fill=tk.X, padx=14, pady=(14, 6))
+        ctk.CTkLabel(top, text="📋  Call Intelligence",
+                     font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                     text_color=ACCENT).pack(side=tk.LEFT)
         ctk.CTkButton(top, text="Clear", width=60, height=28, fg_color=BG_INPUT,
                       hover_color=BG_CARD, text_color=ACCENT, corner_radius=6,
                       font=ctk.CTkFont("Segoe UI", 11),
                       command=self._clear_ai_answers).pack(side=tk.RIGHT)
 
-        # Manual question entry
-        ask = ctk.CTkFrame(card, fg_color="transparent")
-        ask.pack(fill=tk.X, padx=12, pady=(0, 6))
-        self.manual_question_var = tk.StringVar()
-        entry = ctk.CTkEntry(ask, textvariable=self.manual_question_var,
-                             fg_color=BG_INPUT, border_color=BORDER, text_color=FG_BRIGHT,
-                             font=ctk.CTkFont("Segoe UI", 11), corner_radius=6,
-                             placeholder_text="Ask a question...")
-        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        entry.bind("<Return>", lambda e: self._ask_manual_question())
-        ctk.CTkButton(ask, text="Ask", width=60, height=32, fg_color=YELLOW,
-                      hover_color=YELLOW_HOVER, text_color=BG_DARK,
-                      font=ctk.CTkFont("Segoe UI", 12, "bold"), corner_radius=6,
-                      command=self._ask_manual_question).pack(side=tk.RIGHT)
-
-        # AI text display
+        # AI text display (used by both prep and debrief)
         self.ai_text = StyledText(card, height=10, font=("Segoe UI", 10))
-        self.ai_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        self.ai_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 6))
         configure_tags(self.ai_text)
+
+        # ── Post-Call Debrief Section ──
+        debrief_frame = ctk.CTkFrame(card, fg_color=BG_INPUT, corner_radius=12,
+                                      border_width=1, border_color=BORDER)
+        debrief_frame.pack(fill=tk.X, padx=12, pady=(4, 12))
+
+        ctk.CTkLabel(debrief_frame, text="📝 Post-Call Debrief",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=FG_BRIGHT).pack(anchor=tk.W, padx=10, pady=(8, 2))
+
+        ctk.CTkLabel(debrief_frame, text="Auto-filled from transcript — edit before queuing SIFT",
+                     font=ctk.CTkFont("Segoe UI", 9), text_color=FG_DIM
+                     ).pack(anchor=tk.W, padx=10, pady=(0, 6))
+
+        # What went well
+        ctk.CTkLabel(debrief_frame, text="✅ What went well?", text_color=ACCENT,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(anchor=tk.W, padx=10, pady=(4, 0))
+        self.debrief_well_var = tk.StringVar()
+        ctk.CTkEntry(debrief_frame, textvariable=self.debrief_well_var,
+                     fg_color=BG_DARK, border_color=BORDER, text_color=FG_BRIGHT,
+                     font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+                     placeholder_text="e.g. Customer committed to POC, strong exec alignment..."
+                     ).pack(fill=tk.X, padx=10, pady=(2, 4))
+
+        # What's the risk
+        ctk.CTkLabel(debrief_frame, text="⚠️ What's the risk?", text_color=ORANGE,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(anchor=tk.W, padx=10, pady=(2, 0))
+        self.debrief_risk_var = tk.StringVar()
+        ctk.CTkEntry(debrief_frame, textvariable=self.debrief_risk_var,
+                     fg_color=BG_DARK, border_color=BORDER, text_color=FG_BRIGHT,
+                     font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+                     placeholder_text="e.g. Budget not confirmed, competitor eval in progress..."
+                     ).pack(fill=tk.X, padx=10, pady=(2, 4))
+
+        # What's the next step
+        ctk.CTkLabel(debrief_frame, text="🎯 Highest priority next step?", text_color="#60a5fa",
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(anchor=tk.W, padx=10, pady=(2, 0))
+        self.debrief_next_var = tk.StringVar()
+        ctk.CTkEntry(debrief_frame, textvariable=self.debrief_next_var,
+                     fg_color=BG_DARK, border_color=BORDER, text_color=FG_BRIGHT,
+                     font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+                     placeholder_text="e.g. Schedule follow-up demo, send architecture doc..."
+                     ).pack(fill=tk.X, padx=10, pady=(2, 10))
 
     # ─────────────────────────── CALLBACKS ───────────────────────────
 
@@ -357,82 +388,36 @@ class CallNotesApp:
             self.root.destroy()
 
     def _toggle_ai(self):
-        self._ai_enabled = self.ai_toggle_var.get()
+        pass  # No longer needed — kept for compatibility
 
     def _clear_ai_answers(self):
         self.ai_text.config(state=tk.NORMAL)
         self.ai_text.delete("1.0", tk.END)
         self.ai_text.config(state=tk.DISABLED)
-        self._pending_questions.clear()
-
-    def _ask_manual_question(self):
-        q = self.manual_question_var.get().strip()
-        if not q:
-            return
-        self.manual_question_var.set("")
-        self._submit_question(q)
-
-    def _submit_question(self, question):
-        q_key = question.lower().strip()
-        if q_key in self._pending_questions:
-            return
-        self._pending_questions.add(q_key)
-
-        self.ai_text.config(state=tk.NORMAL)
-        if self.ai_text.get("1.0", "end-1c").strip():
-            self.ai_text.insert(tk.END, "\n" + "─" * 50 + "\n", "separator")
-        self.ai_text.insert(tk.END, f"❓ {question}\n", "question")
-        self.ai_text.insert(tk.END, "⏳ Searching AWS docs...\n", "status")
-        self.ai_text.see(tk.END)
-        self.ai_text.config(state=tk.DISABLED)
-
-        self._ai_streaming_started = False
-        self._ai_md_streamer = MarkdownStreamer(self.ai_text)
-
-        def on_chunk(text):
-            self.root.after(0, self._append_ai_chunk, text)
-
-        def on_result(answer, error):
-            self.root.after(0, self._finish_ai_answer, error)
-
-        ask_agent(question, callback=on_result, on_chunk=on_chunk)
-
-    def _append_ai_chunk(self, text):
-        self.ai_text.config(state=tk.NORMAL)
-        if not self._ai_streaming_started:
-            self._ai_streaming_started = True
-            pos = self.ai_text.search("⏳ Searching AWS docs...", "1.0", tk.END)
-            if pos:
-                line_end = self.ai_text.index(f"{pos} lineend+1c")
-                self.ai_text.delete(pos, line_end)
-        self._ai_md_streamer.feed(text)
-        self.ai_text.see(tk.END)
-        self.ai_text.config(state=tk.DISABLED)
-
-    def _finish_ai_answer(self, error):
-        self.ai_text.config(state=tk.NORMAL)
-        if error:
-            pos = self.ai_text.search("⏳ Searching AWS docs...", "1.0", tk.END)
-            if pos:
-                line_end = self.ai_text.index(f"{pos} lineend+1c")
-                self.ai_text.delete(pos, line_end)
-            self.ai_text.insert(tk.END, f"⚠️ {error}\n", "status")
-        else:
-            if hasattr(self, "_ai_md_streamer"):
-                self._ai_md_streamer.flush()
-            content = self.ai_text.get("end-2c", "end-1c")
-            if content != "\n":
-                self.ai_text.insert(tk.END, "\n")
-        self.ai_text.see(tk.END)
-        self.ai_text.config(state=tk.DISABLED)
 
     def _check_transcript_for_questions(self, text):
-        if not self._ai_enabled:
-            return
-        if is_aws_aiml_question(text):
-            question = extract_question(text)
-            if question:
-                self._submit_question(question)
+        pass  # Question detection removed — panel is now prep + debrief only
+
+    def _get_debrief_context(self) -> str:
+        """Collect debrief fields into a text block for SIFT enrichment."""
+        parts = []
+        well = self.debrief_well_var.get().strip()
+        risk = self.debrief_risk_var.get().strip()
+        nxt = self.debrief_next_var.get().strip()
+        if well:
+            parts.append(f"What went well: {well}")
+        if risk:
+            parts.append(f"Risk/concern: {risk}")
+        if nxt:
+            parts.append(f"Next step: {nxt}")
+        return "\n".join(parts)
+
+    def _populate_debrief(self, debrief: dict):
+        """Auto-fill the debrief fields from Claude's analysis. User can edit before SIFT."""
+        self.debrief_well_var.set(debrief.get("went_well", ""))
+        self.debrief_risk_var.set(debrief.get("risk", ""))
+        self.debrief_next_var.set(debrief.get("next_step", ""))
+        self.status_var.set("📝 Post-call debrief auto-filled — review and edit before queuing SIFT")
 
 
     # ─────────────────────────── HISTORY ───────────────────────────
@@ -459,6 +444,9 @@ class CallNotesApp:
             self.history_list.insert(tk.END, f"{item['customer_name']}  ·  {ts}")
 
     def _on_history_select(self, event):
+        # Block history selection while notes are being generated
+        if getattr(self, '_generating', False):
+            return
         sel = self.history_list.curselection()
         if not sel:
             return
@@ -634,7 +622,17 @@ class CallNotesApp:
 
         def _run():
             try:
-                path = queue_sift_insight(customer, self._current_notes)
+                # Gather debrief context if provided
+                debrief = self._get_debrief_context()
+                notes_with_debrief = self._current_notes
+                if debrief:
+                    notes_with_debrief += f"\n\n--- SA DEBRIEF ---\n{debrief}"
+
+                path = queue_sift_insight(customer, notes_with_debrief)
+                if path == "DUPLICATE":
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"⚠️ SIFT insight already queued for {customer}"))
+                    return
                 if not path:
                     self.root.after(0, lambda: self.status_var.set(
                         "SIFT extraction failed — check console"))
@@ -649,7 +647,7 @@ class CallNotesApp:
                 self.root.after(0, lambda: self.status_var.set("SIFT error"))
             finally:
                 self.root.after(0, lambda: self.sift_btn.configure(
-                    state=tk.NORMAL, text="📊 Queue SIFT"))
+                    state=tk.NORMAL, text="📊 SIFT"))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -665,6 +663,10 @@ class CallNotesApp:
         def _run():
             try:
                 path = queue_activity(customer, self._current_notes)
+                if path == "DUPLICATE":
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"⚠️ Activity already queued for {customer}"))
+                    return
                 if not path:
                     self.root.after(0, lambda: self.status_var.set(
                         "Activity extraction failed — check console"))
@@ -679,7 +681,7 @@ class CallNotesApp:
                 self.root.after(0, lambda: self.status_var.set("Activity error"))
             finally:
                 self.root.after(0, lambda: self.activity_btn.configure(
-                    state=tk.NORMAL, text="📝 Queue Activity"))
+                    state=tk.NORMAL, text="📝 Activity"))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -728,11 +730,17 @@ class CallNotesApp:
         self.root.after(0, self._safe_show_final, text)
         self._check_transcript_for_questions(text)
 
+    def _is_transcript_at_bottom(self):
+        """Check if the user is scrolled to (or near) the bottom of the transcript."""
+        yview = self.transcript_text.yview()
+        return yview[1] >= 0.95  # within 5% of the bottom
+
     def _safe_show_partial(self, text):
         self.transcript_text.config(state=tk.NORMAL)
         self.transcript_text.delete("partial_start", "end-1c")
         self.transcript_text.insert("partial_start", text)
-        self.transcript_text.see(tk.END)
+        if self._is_transcript_at_bottom():
+            self.transcript_text.see(tk.END)
         self.transcript_text.config(state=tk.DISABLED)
 
     def _safe_show_final(self, text):
@@ -740,7 +748,8 @@ class CallNotesApp:
         self.transcript_text.delete("partial_start", "end-1c")
         self.transcript_text.insert("partial_start", text + "\n")
         self.transcript_text.mark_set("partial_start", "end-1c")
-        self.transcript_text.see(tk.END)
+        if self._is_transcript_at_bottom():
+            self.transcript_text.see(tk.END)
         self.transcript_text.config(state=tk.DISABLED)
 
     # ─────────────────────────── RECORDING ───────────────────────────
@@ -802,12 +811,18 @@ class CallNotesApp:
             messagebox.showinfo("Empty", "No transcript was captured.")
             return
 
+        # Lock the customer name at the moment Stop is clicked
+        self._locked_customer = self.customer_var.get().strip() or "Unknown"
+        self._generating = True
+        # History clicks are guarded by _generating flag — no need to disable the list.
+        # Customer field stays editable so you can type a new name for the next call.
+
         self.status_var.set("Generating notes & follow-up email...")
         threading.Thread(target=self._generate_and_save, args=(transcript,),
                          daemon=True).start()
 
     def _generate_and_save(self, transcript):
-        customer = self.customer_var.get().strip()
+        customer = self._locked_customer
         self.root.after(0, self._prepare_notes_for_streaming)
         self.root.after(0, self._prepare_email_for_streaming)
 
@@ -836,16 +851,28 @@ class CallNotesApp:
             except Exception as e:
                 results["email_error"] = e
 
+        def run_debrief():
+            try:
+                debrief = extract_debrief(transcript, customer)
+                self.root.after(0, lambda d=debrief: self._populate_debrief(d))
+            except Exception as e:
+                print(f"[debrief] Error: {e}")
+
         notes_thread = threading.Thread(target=run_notes, daemon=True)
         email_thread = threading.Thread(target=run_email, daemon=True)
+        debrief_thread = threading.Thread(target=run_debrief, daemon=True)
         notes_thread.start()
         email_thread.start()
+        debrief_thread.start()
         notes_thread.join()
         email_thread.join()
+        # Don't wait for debrief — it'll populate the fields when ready
 
         if results["notes_error"]:
             self.root.after(0, lambda: messagebox.showerror(
                 "Error", f"Failed to generate notes:\n{results['notes_error']}"))
+            self.root.after(0, lambda: self.status_var.set("Error generating notes."))
+            self._generating = False
             self.root.after(0, lambda: self.status_var.set("Error generating notes."))
             return
 
@@ -891,13 +918,11 @@ class CallNotesApp:
             except Exception as e:
                 print(f"[outlook tasks] Error: {e}")
 
-            # Queue SA activity for AWSentral submission via Kiro hook
-            try:
-                activity_path = queue_activity(customer, results["notes"])
-                if activity_path:
-                    print(f"[activity] Activity queued for submission: {activity_path}")
-            except Exception as e:
-                print(f"[activity] Error: {e}")
+            # SA activity is queued on-demand via the "Queue Activity" button,
+            # not automatically on stop. See _log_activity().
+
+        # Unlock UI — generation complete
+        self._generating = False
 
     def _prepare_notes_for_streaming(self):
         self.notes_text.config(state=tk.NORMAL)
@@ -921,22 +946,19 @@ class CallNotesApp:
 
         def run():
             try:
-                # Get sessions from local history
                 sessions = list_sessions(customer)[:3]
 
-                # Also scan local note files for this customer
                 local_notes = []
                 try:
                     all_notes = scan_notes()
                     customer_lower = customer.lower()
                     for note in all_notes:
                         if customer_lower in note.get("customer", "").lower():
-                            # Read the file content
                             fpath = note.get("filepath", "")
                             if fpath and os.path.exists(fpath):
                                 try:
                                     with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                                        content = f.read()[:5000]  # cap per file
+                                        content = f.read()[:5000]
                                     local_notes.append({
                                         "timestamp": note.get("date", ""),
                                         "notes": content,
@@ -944,16 +966,11 @@ class CallNotesApp:
                                     })
                                 except Exception:
                                     pass
-                    local_notes = local_notes[:5]  # cap at 5 files
+                    local_notes = local_notes[:5]
                 except Exception:
                     pass
 
-                # Merge: saved sessions + local note files
-                all_prep_notes = []
-                for s in sessions:
-                    all_prep_notes.append(s)
-                for ln in local_notes:
-                    all_prep_notes.append(ln)
+                all_prep_notes = list(sessions) + list(local_notes)
 
                 if not all_prep_notes:
                     self.root.after(0, self._prep_no_history, customer)
@@ -963,6 +980,7 @@ class CallNotesApp:
                 file_count = len(local_notes)
                 self.root.after(0, lambda: self._prep_update_status(
                     f"Found {db_count} session(s) + {file_count} note file(s). Generating prep brief..."))
+
                 self._prep_streaming_started = False
                 self._prep_md_streamer = MarkdownStreamer(self.ai_text)
 
@@ -1161,7 +1179,7 @@ class NotesRetrieverTab:
         sh_btn_row = ctk.CTkFrame(sidebar, fg_color="transparent")
         sh_btn_row.pack(fill=tk.X, padx=10, pady=(0, 10))
         ctk.CTkButton(sh_btn_row, text="🗑 Delete", width=90, height=26,
-                      fg_color=BG_INPUT, hover_color=RED, text_color=FG_DIM,
+                      fg_color=BG_INPUT, hover_color=RED, text_color=FG_BRIGHT,
                       border_width=1, border_color=BORDER, corner_radius=6,
                       font=ctk.CTkFont("Segoe UI", 10),
                       command=self._delete_selected_session).pack(side=tk.LEFT)
@@ -1216,7 +1234,7 @@ class NotesRetrieverTab:
         ]:
             ctk.CTkButton(
                 prompts_frame, text=prompt, height=24,
-                fg_color=BG_CARD, hover_color=BG_INPUT, text_color=FG_DIM,
+                fg_color=BG_CARD, hover_color=ACCENT, text_color=FG_BRIGHT,
                 border_width=1, border_color=BORDER, corner_radius=12,
                 font=ctk.CTkFont("Segoe UI", 10),
                 command=lambda p=prompt: self._use_suggestion(p)
@@ -1842,7 +1860,7 @@ class CustomerResearchTab:
         sh_btn_row = ctk.CTkFrame(sidebar, fg_color="transparent")
         sh_btn_row.pack(fill=tk.X, padx=10, pady=(0, 10))
         ctk.CTkButton(sh_btn_row, text="🗑 Delete", width=90, height=26,
-                      fg_color=BG_INPUT, hover_color=RED, text_color=FG_DIM,
+                      fg_color=BG_INPUT, hover_color=RED, text_color=FG_BRIGHT,
                       border_width=1, border_color=BORDER, corner_radius=6,
                       font=ctk.CTkFont("Segoe UI", 10),
                       command=self._delete_selected_session).pack(side=tk.LEFT)
@@ -1866,7 +1884,7 @@ class CustomerResearchTab:
         ]:
             ctk.CTkButton(
                 prompts_frame, text=prompt, height=24,
-                fg_color=BG_CARD, hover_color=BG_INPUT, text_color=FG_DIM,
+                fg_color=BG_CARD, hover_color=ACCENT, text_color=FG_BRIGHT,
                 border_width=1, border_color=BORDER, corner_radius=12,
                 font=ctk.CTkFont("Segoe UI", 10),
                 command=lambda p=prompt: self._use_suggestion(p)
@@ -2395,13 +2413,13 @@ class InsightsTab:
         self._chart_frames = []
         for r in range(2):
             for c in range(2):
-                frame = ctk.CTkFrame(charts_frame, fg_color=BG_PANEL, corner_radius=12,
+                frame = ctk.CTkFrame(charts_frame, fg_color=BG_PANEL, corner_radius=14,
                                       border_width=1, border_color=BORDER)
                 frame.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
                 self._chart_frames.append(frame)
 
         # Right: Trend Generation panel (full height)
-        trend_panel = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=12,
+        trend_panel = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=14,
                                     border_width=1, border_color=BORDER)
         trend_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
@@ -2419,15 +2437,19 @@ class InsightsTab:
 
         self._trend_text = StyledText(trend_panel, font=("Segoe UI", 10))
         self._trend_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        configure_tags(self._trend_text)
 
     def _make_stat_card(self, parent, label, value, color=ACCENT):
-        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=10,
-                             border_width=1, border_color=BORDER, width=160, height=70)
+        card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=12,
+                             border_width=1, border_color=BORDER, width=140, height=75)
         card.pack(side=tk.LEFT, padx=(0, 8), fill=tk.Y)
         card.pack_propagate(False)
-        ctk.CTkLabel(card, text=str(value), font=ctk.CTkFont("Segoe UI", 22, "bold"),
-                     text_color=color).pack(padx=12, pady=(10, 0))
-        ctk.CTkLabel(card, text=label, font=ctk.CTkFont("Segoe UI", 10),
+        # Colored accent line at top
+        accent_bar = ctk.CTkFrame(card, fg_color=color, corner_radius=0, height=3)
+        accent_bar.pack(fill=tk.X, padx=12, pady=(8, 0))
+        ctk.CTkLabel(card, text=str(value), font=ctk.CTkFont("Segoe UI", 24, "bold"),
+                     text_color=color).pack(padx=12, pady=(4, 0))
+        ctk.CTkLabel(card, text=label, font=ctk.CTkFont("Segoe UI", 9),
                      text_color=FG_DIM).pack(padx=12, pady=(0, 8))
 
     def _generate_trends(self):
@@ -2492,13 +2514,22 @@ Focus on:
 - Common objections or concerns
 - Emerging opportunities or market shifts
 
-For each trend, write:
-- A short bold title (5-8 words)
-- 1-2 sentences explaining the trend with specific examples from the calls
-- How many calls/customers this appeared in (approximate)
+Use this markdown format for EACH trend:
+
+## 1. Trend Title Here
+
+1-2 sentences explaining the trend with specific examples from the calls. Reference customer names where relevant.
+
+- **Appeared in:** ~X calls (Customer A, Customer B, Customer C)
 
 Keep it actionable — these should help a sales team prioritize and prepare.
-Do NOT use markdown formatting. Use plain text with dashes for bullets."""
+
+FORMATTING RULES:
+- Use ## for each numbered trend title (e.g. ## 1. Agentic AI Adoption)
+- Use regular paragraphs for the explanation
+- Use - for bullet points, each on its own line
+- Use **bold** for customer names and key terms
+- Add a blank line between each section"""
 
                 payload = {
                     "anthropic_version": "bedrock-2023-05-31",
@@ -2615,14 +2646,18 @@ Do NOT use markdown formatting. Use plain text with dashes for bullets."""
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
 
-        # Dark theme for matplotlib — bold white text for legibility
-        chart_bg = "#171717"
-        chart_fg = "#ffffff"
+        # Dark theme for matplotlib — polished modern look
+        chart_bg = "#0a0a0a"
+        chart_face = "#111111"
+        chart_fg = "#e0e0e0"
+        grid_color = "#1a2332"
         accent = "#10a37f"
         accent2 = "#6ee7b7"
+        accent_light = "#10a37f50"
         red_color = "#ef4444"
-        label_size = 9
-        title_size = 12
+        red_light = "#ef444450"
+        label_size = 8
+        title_size = 11
 
         # Clear stat cards
         for w in self._stats_frame.winfo_children():
@@ -2646,75 +2681,88 @@ Do NOT use markdown formatting. Use plain text with dashes for bullets."""
             canvas.draw()
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        # Chart 1: Daily calls (line chart)
-        fig1 = Figure(figsize=(5, 3), dpi=90, facecolor=chart_bg)
+        # Chart 1: Daily calls (area chart with gradient)
+        fig1 = Figure(figsize=(5, 3), dpi=100, facecolor=chart_bg)
         ax1 = fig1.add_subplot(111)
-        ax1.set_facecolor(chart_bg)
+        ax1.set_facecolor(chart_face)
         days = list(daily_counts.keys())
         counts = list(daily_counts.values())
-        ax1.fill_between(range(len(days)), counts, alpha=0.3, color=accent)
-        ax1.plot(range(len(days)), counts, color=accent, linewidth=2, marker='o', markersize=4)
+        ax1.fill_between(range(len(days)), counts, alpha=0.15, color=accent)
+        ax1.plot(range(len(days)), counts, color=accent, linewidth=2.5,
+                 marker='o', markersize=5, markerfacecolor=accent2, markeredgecolor=accent,
+                 markeredgewidth=1.5)
         ax1.set_xticks(range(0, len(days), 2))
-        ax1.set_xticklabels([days[i] for i in range(0, len(days), 2)], fontsize=7, color=chart_fg)
-        ax1.set_title("Calls — Last 14 Days", fontsize=10, color=chart_fg, pad=8)
+        ax1.set_xticklabels([days[i] for i in range(0, len(days), 2)],
+                            fontsize=7, color=chart_fg, fontfamily="Segoe UI")
+        ax1.set_title("Calls — Last 14 Days", fontsize=title_size, color=chart_fg,
+                      pad=10, fontfamily="Segoe UI", fontweight="bold")
         ax1.tick_params(colors=chart_fg, labelsize=7)
-        ax1.spines['bottom'].set_color("#2d2d2d")
-        ax1.spines['left'].set_color("#2d2d2d")
+        ax1.grid(axis='y', color=grid_color, linewidth=0.5, alpha=0.5)
+        ax1.spines['bottom'].set_color(grid_color)
+        ax1.spines['left'].set_color(grid_color)
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
         fig1.tight_layout(pad=1.5)
         embed_chart(self._chart_frames[0], fig1)
 
-        # Chart 2: Top customers (horizontal bar)
-        fig2 = Figure(figsize=(5, 3), dpi=90, facecolor=chart_bg)
+        # Chart 2: Top customers (horizontal bar with gradient)
+        fig2 = Figure(figsize=(5, 3), dpi=100, facecolor=chart_bg)
         ax2 = fig2.add_subplot(111)
-        ax2.set_facecolor(chart_bg)
+        ax2.set_facecolor(chart_face)
         if top_customers:
-            names = [n[:20] for n, _ in reversed(top_customers)]
+            names = [n[:18] for n, _ in reversed(top_customers)]
             vals = [v for _, v in reversed(top_customers)]
-            bars = ax2.barh(range(len(names)), vals, color=accent, height=0.6)
+            bars = ax2.barh(range(len(names)), vals, color=accent, height=0.55,
+                           edgecolor=accent2, linewidth=0.5, alpha=0.85)
             ax2.set_yticks(range(len(names)))
-            ax2.set_yticklabels(names, fontsize=7, color=chart_fg)
+            ax2.set_yticklabels(names, fontsize=7, color=chart_fg, fontfamily="Segoe UI")
             for bar, val in zip(bars, vals):
-                ax2.text(bar.get_width() + 0.2, bar.get_y() + bar.get_height()/2,
-                        str(val), va='center', fontsize=7, color=accent2)
-        ax2.set_title("Top Customers", fontsize=10, color=chart_fg, pad=8)
+                ax2.text(bar.get_width() + 0.15, bar.get_y() + bar.get_height()/2,
+                        str(val), va='center', fontsize=8, color=accent2,
+                        fontweight='bold', fontfamily="Segoe UI")
+        ax2.set_title("Top Customers", fontsize=title_size, color=chart_fg,
+                      pad=10, fontfamily="Segoe UI", fontweight="bold")
         ax2.tick_params(colors=chart_fg, labelsize=7)
-        ax2.spines['bottom'].set_color("#2d2d2d")
-        ax2.spines['left'].set_color("#2d2d2d")
+        ax2.grid(axis='x', color=grid_color, linewidth=0.5, alpha=0.5)
+        ax2.spines['bottom'].set_color(grid_color)
+        ax2.spines['left'].set_color(grid_color)
         ax2.spines['top'].set_visible(False)
         ax2.spines['right'].set_visible(False)
         fig2.tight_layout(pad=1.5)
         embed_chart(self._chart_frames[1], fig2)
 
-        # Chart 3: Competitor frequency (horizontal bar)
-        fig3 = Figure(figsize=(5, 3), dpi=90, facecolor=chart_bg)
+        # Chart 3: Competitor frequency (horizontal bar — red theme)
+        fig3 = Figure(figsize=(5, 3), dpi=100, facecolor=chart_bg)
         ax3 = fig3.add_subplot(111)
-        ax3.set_facecolor(chart_bg)
+        ax3.set_facecolor(chart_face)
         if comp_summary:
             top_comp = list(comp_summary.items())[:10]
-            cnames = [n[:20] for n, _ in reversed(top_comp)]
+            cnames = [n[:18] for n, _ in reversed(top_comp)]
             cvals = [v for _, v in reversed(top_comp)]
-            bars = ax3.barh(range(len(cnames)), cvals, color=red_color, height=0.6, alpha=0.8)
+            bars = ax3.barh(range(len(cnames)), cvals, color=red_color, height=0.55,
+                           edgecolor="#fca5a5", linewidth=0.5, alpha=0.85)
             ax3.set_yticks(range(len(cnames)))
-            ax3.set_yticklabels(cnames, fontsize=7, color=chart_fg)
+            ax3.set_yticklabels(cnames, fontsize=7, color=chart_fg, fontfamily="Segoe UI")
             for bar, val in zip(bars, cvals):
-                ax3.text(bar.get_width() + 0.2, bar.get_y() + bar.get_height()/2,
-                        str(val), va='center', fontsize=7, color="#fca5a5")
+                ax3.text(bar.get_width() + 0.15, bar.get_y() + bar.get_height()/2,
+                        str(val), va='center', fontsize=8, color="#fca5a5",
+                        fontweight='bold', fontfamily="Segoe UI")
         else:
             ax3.text(0.5, 0.5, "No competitor data yet", ha='center', va='center',
-                    fontsize=10, color=FG_DIM, transform=ax3.transAxes)
-        ax3.set_title("Competitor Mentions", fontsize=10, color=chart_fg, pad=8)
+                    fontsize=11, color=FG_DIM, transform=ax3.transAxes, fontfamily="Segoe UI")
+        ax3.set_title("Competitor Mentions", fontsize=title_size, color=chart_fg,
+                      pad=10, fontfamily="Segoe UI", fontweight="bold")
         ax3.tick_params(colors=chart_fg, labelsize=7)
-        ax3.spines['bottom'].set_color("#2d2d2d")
-        ax3.spines['left'].set_color("#2d2d2d")
+        ax3.grid(axis='x', color=grid_color, linewidth=0.5, alpha=0.5)
+        ax3.spines['bottom'].set_color(grid_color)
+        ax3.spines['left'].set_color(grid_color)
         ax3.spines['top'].set_visible(False)
         ax3.spines['right'].set_visible(False)
         fig3.tight_layout(pad=1.5)
         embed_chart(self._chart_frames[2], fig3)
 
-        # Chart 4: Sentiment breakdown (pie/donut)
-        fig4 = Figure(figsize=(5, 3), dpi=90, facecolor=chart_bg)
+        # Chart 4: Sentiment breakdown (donut chart)
+        fig4 = Figure(figsize=(5, 3), dpi=100, facecolor=chart_bg)
         ax4 = fig4.add_subplot(111)
         ax4.set_facecolor(chart_bg)
         if all_mentions:
@@ -2725,19 +2773,25 @@ Do NOT use markdown formatting. Use plain text with dashes for bullets."""
                     sentiments[s] += 1
             labels = [k.title() for k, v in sentiments.items() if v > 0]
             sizes = [v for v in sentiments.values() if v > 0]
-            colors_pie = ["#10a37f", "#ef4444", "#6b7280"][:len(labels)]
+            colors_pie = ["#10a37f", "#ef4444", "#4b5563"][:len(labels)]
+            explode = [0.02] * len(labels)
             if sizes:
                 wedges, texts, autotexts = ax4.pie(
                     sizes, labels=labels, autopct='%1.0f%%', startangle=90,
-                    colors=colors_pie, textprops={'color': chart_fg, 'fontsize': 8},
-                    pctdistance=0.75, wedgeprops=dict(width=0.4))
+                    colors=colors_pie, textprops={'color': chart_fg, 'fontsize': 9,
+                                                   'fontfamily': 'Segoe UI'},
+                    pctdistance=0.78, wedgeprops=dict(width=0.38, edgecolor=chart_bg,
+                                                       linewidth=2),
+                    explode=explode)
                 for t in autotexts:
-                    t.set_fontsize(8)
-                    t.set_color(chart_fg)
+                    t.set_fontsize(9)
+                    t.set_color("#ffffff")
+                    t.set_fontweight("bold")
         else:
             ax4.text(0.5, 0.5, "No sentiment data yet", ha='center', va='center',
-                    fontsize=10, color=FG_DIM, transform=ax4.transAxes)
-        ax4.set_title("Competitor Sentiment", fontsize=10, color=chart_fg, pad=8)
+                    fontsize=11, color=FG_DIM, transform=ax4.transAxes, fontfamily="Segoe UI")
+        ax4.set_title("Competitor Sentiment", fontsize=title_size, color=chart_fg,
+                      pad=10, fontfamily="Segoe UI", fontweight="bold")
         fig4.tight_layout(pad=1.5)
         embed_chart(self._chart_frames[3], fig4)
 
