@@ -4,11 +4,11 @@ from tkinter import messagebox, filedialog
 import customtkinter as ctk
 import threading
 from transcription.transcriber import LiveTranscriber
-from transcription.summarizer import generate_notes, generate_followup_email, generate_prep_summary, extract_competitors, extract_action_items, extract_debrief
+from transcription.summarizer import generate_notes, generate_followup_email, generate_prep_summary, extract_competitors, extract_debrief
 from transcription.storage import save_notes, _md_to_docx
 from transcription.history import save_session, list_sessions, get_all_customers
 from transcription.competitive_intel import save_competitor_mentions
-from transcription.outlook_tasks import create_outlook_tasks
+from transcription.outlook_tasks import create_followup_task
 from transcription.sift_insight import queue_sift_insight
 from transcription.activity_logger import queue_activity
 from transcription.agent_client import warmup as warmup_agent, shutdown as shutdown_agent
@@ -907,14 +907,11 @@ class CallNotesApp:
             except Exception as e:
                 print(f"[competitive intel] Error: {e}")
 
-            # Extract action items and create Outlook tasks
+            # Create a single follow-up task in Outlook
             try:
-                items = extract_action_items(results["notes"], customer)
-                if items:
-                    count = create_outlook_tasks(items, customer)
-                    if count:
-                        self.root.after(0, lambda: self.status_var.set(
-                            f"Notes saved + {count} Outlook task(s) created"))
+                if create_followup_task(customer):
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"Notes saved + follow-up task created"))
             except Exception as e:
                 print(f"[outlook tasks] Error: {e}")
 
@@ -1013,6 +1010,11 @@ class CallNotesApp:
         self.ai_text.insert(tk.END, f"⏳ {msg}\n", "status")
         self.ai_text.config(state=tk.DISABLED)
 
+    def _is_ai_text_at_bottom(self):
+        """Check if the user is scrolled to (or near) the bottom of the AI panel."""
+        yview = self.ai_text.yview()
+        return yview[1] >= 0.95
+
     def _prep_append_chunk(self, text):
         self.ai_text.config(state=tk.NORMAL)
         if not self._prep_streaming_started:
@@ -1021,14 +1023,16 @@ class CallNotesApp:
             if pos:
                 self.ai_text.delete(pos, f"{pos} lineend+1c")
         self._prep_md_streamer.feed(text)
-        self.ai_text.see(tk.END)
+        if self._is_ai_text_at_bottom():
+            self.ai_text.see(tk.END)
         self.ai_text.config(state=tk.DISABLED)
 
     def _prep_finish(self):
         self.ai_text.config(state=tk.NORMAL)
         if hasattr(self, '_prep_md_streamer'):
             self._prep_md_streamer.flush()
-        self.ai_text.see(tk.END)
+        if self._is_ai_text_at_bottom():
+            self.ai_text.see(tk.END)
         self.ai_text.config(state=tk.DISABLED)
         self.prep_btn.configure(state=tk.NORMAL, text="📋 Pre-Call Prep")
         self.status_var.set("Pre-call prep ready.")
@@ -2574,14 +2578,16 @@ FORMATTING RULES:
             self._trend_streaming_started = True
             self._trend_text.delete("1.0", tk.END)
         self._trend_md_streamer.feed(text)
-        self._trend_text.see(tk.END)
+        if self._trend_text.yview()[1] >= 0.95:
+            self._trend_text.see(tk.END)
         self._trend_text.config(state=tk.DISABLED)
 
     def _trend_finish(self):
         self._trend_text.config(state=tk.NORMAL)
         if hasattr(self, '_trend_md_streamer'):
             self._trend_md_streamer.flush()
-        self._trend_text.see(tk.END)
+        if self._trend_text.yview()[1] >= 0.95:
+            self._trend_text.see(tk.END)
         self._trend_text.config(state=tk.DISABLED)
         self._trend_btn.configure(state=tk.NORMAL, text="Generate Trends")
 
