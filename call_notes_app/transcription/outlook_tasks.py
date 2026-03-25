@@ -5,10 +5,16 @@ from datetime import datetime, timedelta
 def create_followup_task(customer_name: str) -> bool:
     """Create one 'Follow up - {Customer Name}' task in Outlook To Do. Returns True on success."""
     try:
+        import pythoncom
         import win32com.client
     except ImportError:
         print("[outlook_tasks] pywin32 not installed, skipping task creation")
         return False
+
+    try:
+        pythoncom.CoInitialize()
+    except Exception:
+        pass  # Already initialized on main thread
 
     try:
         outlook = win32com.client.Dispatch("Outlook.Application")

@@ -5,7 +5,7 @@ import customtkinter as ctk
 import threading
 from transcription.transcriber import LiveTranscriber
 from transcription.summarizer import generate_notes, generate_followup_email, generate_prep_summary, extract_competitors, extract_debrief
-from transcription.storage import save_notes, _md_to_docx
+from transcription.storage import save_notes, _md_to_docx, export_share_html
 from transcription.history import save_session, list_sessions, get_all_customers
 from transcription.competitive_intel import save_competitor_mentions
 from transcription.outlook_tasks import create_followup_task
@@ -41,6 +41,110 @@ ASST_BUBBLE = "#111111"     # Assistant message background
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+# ─── Theme System ───────────────────────────────────────────────────
+THEMES = {
+    "dark": {
+        "BG_DARK": "#0a0a0a", "BG_PANEL": "#111111", "BG_INPUT": "#161616",
+        "BG_CARD": "#1a1a1a", "FG_TEXT": "#c8ccd0", "FG_DIM": "#5a6270",
+        "FG_BRIGHT": "#eef0f2", "BORDER": "#1f2937",
+    },
+    "light": {
+        "BG_DARK": "#f3f4f6", "BG_PANEL": "#ffffff", "BG_INPUT": "#f9fafb",
+        "BG_CARD": "#e5e7eb", "FG_TEXT": "#1f2937", "FG_DIM": "#6b7280",
+        "FG_BRIGHT": "#111827", "BORDER": "#d1d5db",
+    },
+}
+_current_theme = "dark"
+
+
+def get_theme():
+    return _current_theme
+
+
+def set_theme(name):
+    global _current_theme, BG_DARK, BG_PANEL, BG_INPUT, BG_CARD, FG_TEXT, FG_DIM, FG_BRIGHT, BORDER
+    _current_theme = name
+    t = THEMES[name]
+    BG_DARK = t["BG_DARK"]; BG_PANEL = t["BG_PANEL"]; BG_INPUT = t["BG_INPUT"]
+    BG_CARD = t["BG_CARD"]; FG_TEXT = t["FG_TEXT"]; FG_DIM = t["FG_DIM"]
+    FG_BRIGHT = t["FG_BRIGHT"]; BORDER = t["BORDER"]
+    ctk.set_appearance_mode("dark" if name == "dark" else "light")
+
+
+# ─── Toast Notification ────────────────────────────────────────────
+class ToastNotification:
+    """Lightweight toast popup that auto-dismisses."""
+
+    _active_toasts = []
+
+    def __init__(self, parent, message, duration=3000, color=ACCENT):
+        self._parent = parent
+        self._frame = ctk.CTkFrame(parent, fg_color=color, corner_radius=10,
+                                    border_width=0)
+        ctk.CTkLabel(self._frame, text=message, text_color="#ffffff",
+                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     wraplength=350).pack(padx=16, pady=10)
+
+        # Stack below existing toasts
+        offset = len(ToastNotification._active_toasts) * 50
+        ToastNotification._active_toasts.append(self)
+
+        self._frame.place(relx=1.0, rely=1.0, x=-20, y=-(20 + offset), anchor="se")
+        self._frame.lift()
+        parent.after(duration, self._dismiss)
+
+    def _dismiss(self):
+        try:
+            self._frame.place_forget()
+            self._frame.destroy()
+            if self in ToastNotification._active_toasts:
+                ToastNotification._active_toasts.remove(self)
+        except Exception:
+            pass
+
+
+def show_toast(parent, message, duration=3000, color=ACCENT):
+    """Show a toast notification on the given parent widget."""
+    ToastNotification(parent, message, duration, color)
+
+
+class CollapsibleSection(ctk.CTkFrame):
+    """A section with a clickable header that toggles content visibility."""
+
+    def __init__(self, master, title, icon="", **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self._expanded = True
+        self._title = title
+        self._icon = icon
+
+        self._header = ctk.CTkFrame(self, fg_color="transparent", cursor="hand2")
+        self._header.pack(fill=tk.X)
+
+        self._toggle_label = ctk.CTkLabel(
+            self._header, text=f"▼ {icon}  {title}",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"), text_color=FG_BRIGHT,
+            anchor="w", cursor="hand2")
+        self._toggle_label.pack(side=tk.LEFT, padx=0)
+
+        self._header.bind("<Button-1>", lambda e: self.toggle())
+        self._toggle_label.bind("<Button-1>", lambda e: self.toggle())
+
+        self._content = ctk.CTkFrame(self, fg_color="transparent")
+        self._content.pack(fill=tk.BOTH, expand=True)
+
+    @property
+    def content(self):
+        return self._content
+
+    def toggle(self):
+        self._expanded = not self._expanded
+        arrow = "▼" if self._expanded else "▶"
+        self._toggle_label.configure(text=f"{arrow} {self._icon}  {self._title}")
+        if self._expanded:
+            self._content.pack(fill=tk.BOTH, expand=True)
+        else:
+            self._content.pack_forget()
 
 
 class StyledText(tk.Text):
@@ -112,16 +216,29 @@ class CallNotesApp:
         else:
             self.status_var = tk.StringVar(value="Ready")
 
-        # 3-column layout
-        cols = ctk.CTkFrame(self.root, fg_color="transparent")
-        cols.pack(fill=tk.BOTH, expand=True, padx=14, pady=10)
-        cols.columnconfigure(1, weight=3)
-        cols.columnconfigure(2, weight=2)
-        cols.rowconfigure(0, weight=1)
+        # Recording indicator (pulsing red dot)
+        self._recording_dot = None
+        self._recording_pulse_on = False
+        self._recording_pulse_id = None
 
-        self._build_history_panel(cols)
-        self._build_center_panel(cols)
-        self._build_ai_panel(cols)
+        # 3-column layout using PanedWindow for resizable panels
+        self._paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
+                                      bg=BG_DARK, sashwidth=6, sashrelief=tk.FLAT,
+                                      opaqueresize=True, bd=0)
+        self._paned.pack(fill=tk.BOTH, expand=True, padx=14, pady=10)
+
+        # Build panels into the PanedWindow
+        self._history_frame = ctk.CTkFrame(self._paned, fg_color="transparent")
+        self._center_frame = ctk.CTkFrame(self._paned, fg_color="transparent")
+        self._ai_frame = ctk.CTkFrame(self._paned, fg_color="transparent")
+
+        self._paned.add(self._history_frame, minsize=180, width=220)
+        self._paned.add(self._center_frame, minsize=400, width=700)
+        self._paned.add(self._ai_frame, minsize=250, width=350)
+
+        self._build_history_panel(self._history_frame)
+        self._build_center_panel(self._center_frame)
+        self._build_ai_panel(self._ai_frame)
 
         # Status bar at bottom (only in tab/embedded mode — standalone uses title bar)
         if not self._is_root:
@@ -136,7 +253,7 @@ class CallNotesApp:
     def _build_history_panel(self, parent):
         card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=14,
                              border_width=1, border_color=BORDER)
-        card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        card.pack(fill=tk.BOTH, expand=True)
 
         ctk.CTkLabel(card, text="📋  History",
                      font=ctk.CTkFont("Segoe UI", 13, "bold"),
@@ -176,7 +293,7 @@ class CallNotesApp:
     def _build_center_panel(self, parent):
         card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=14,
                              border_width=1, border_color=BORDER)
-        card.grid(row=0, column=1, sticky="nsew", padx=6)
+        card.pack(fill=tk.BOTH, expand=True)
 
         # Controls grid
         ctrl = ctk.CTkFrame(card, fg_color="transparent")
@@ -228,7 +345,13 @@ class CallNotesApp:
             row1, text="⏹  Stop & Generate", fg_color=RED, hover_color=RED_HOVER,
             text_color=BG_DARK, font=ctk.CTkFont("Segoe UI", 12, "bold"),
             corner_radius=10, height=38, state=tk.DISABLED, command=self._stop)
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 16))
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        # Pulsing recording indicator
+        self._recording_dot = ctk.CTkLabel(
+            row1, text="  🔴 REC", text_color=RED,
+            font=ctk.CTkFont("Segoe UI", 11, "bold"))
+        # Hidden by default — shown when recording starts
 
         self.prep_btn = ctk.CTkButton(
             row1, text="📋 Pre-Call Prep", fg_color=BG_INPUT, hover_color=BG_CARD,
@@ -258,6 +381,13 @@ class CallNotesApp:
             command=self._export_pdf)
         self.export_pdf_btn.pack(side=tk.LEFT, padx=(0, 4))
 
+        self.share_html_btn = ctk.CTkButton(
+            row2, text="🔗 Share", fg_color="#1f2937", hover_color=ACCENT,
+            text_color=FG_BRIGHT, font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
+            height=30, width=70, border_width=1, border_color="#374151", state=tk.DISABLED,
+            command=self._export_share_html)
+        self.share_html_btn.pack(side=tk.LEFT, padx=(0, 4))
+
         self.sift_btn = ctk.CTkButton(
             row2, text="📊 SIFT", fg_color="#1f2937", hover_color=ACCENT,
             text_color=FG_BRIGHT, font=ctk.CTkFont("Segoe UI", 10), corner_radius=8,
@@ -272,12 +402,51 @@ class CallNotesApp:
             command=self._log_activity)
         self.activity_btn.pack(side=tk.LEFT)
 
-        # Transcript
-        transcript_header = ctk.CTkFrame(card, fg_color="transparent")
-        transcript_header.pack(fill=tk.X, padx=16, pady=(4, 4))
-        ctk.CTkLabel(transcript_header, text="🎙  Live Transcript",
+        # ── Post-Call Progress Checklist ──
+        self._checklist_frame = ctk.CTkFrame(card, fg_color=BG_INPUT, corner_radius=10,
+                                              border_width=1, border_color=BORDER)
+        # Hidden by default — shown after Stop & Generate
+        self._checklist_items = {}
+        self._checklist_labels = {}
+        self._checklist_steps = [
+            ("notes", "Generate notes"),
+            ("email", "Generate follow-up email"),
+            ("save", "Save session"),
+            ("competitors", "Extract competitor mentions"),
+            ("outlook_task", "Create Outlook follow-up task"),
+            ("debrief", "Auto-fill post-call debrief"),
+        ]
+        checklist_header = ctk.CTkFrame(self._checklist_frame, fg_color="transparent")
+        checklist_header.pack(fill=tk.X, padx=10, pady=(8, 4))
+        ctk.CTkLabel(checklist_header, text="⏳  Post-Call Progress",
                      font=ctk.CTkFont("Segoe UI", 11, "bold"),
                      text_color=FG_BRIGHT).pack(side=tk.LEFT)
+        self._checklist_dismiss_btn = ctk.CTkButton(
+            checklist_header, text="✕", width=24, height=24,
+            fg_color="transparent", hover_color=BG_CARD, text_color=FG_DIM,
+            font=ctk.CTkFont("Segoe UI", 11), corner_radius=4,
+            command=self._hide_checklist)
+        self._checklist_dismiss_btn.pack(side=tk.RIGHT)
+        for key, label in self._checklist_steps:
+            row = ctk.CTkFrame(self._checklist_frame, fg_color="transparent")
+            row.pack(fill=tk.X, padx=14, pady=1)
+            status_lbl = ctk.CTkLabel(row, text="⬜", width=20,
+                                       font=ctk.CTkFont("Segoe UI", 11))
+            status_lbl.pack(side=tk.LEFT)
+            text_lbl = ctk.CTkLabel(row, text=label, text_color=FG_DIM,
+                                     font=ctk.CTkFont("Segoe UI", 10))
+            text_lbl.pack(side=tk.LEFT, padx=(4, 0))
+            self._checklist_items[key] = "pending"
+            self._checklist_labels[key] = (status_lbl, text_lbl)
+        # Bottom padding
+        ctk.CTkFrame(self._checklist_frame, fg_color="transparent", height=6).pack()
+
+        # ── Collapsible: Transcript ──
+        self._transcript_section = CollapsibleSection(card, "Live Transcript", icon="🎙")
+        self._transcript_section.pack(fill=tk.BOTH, expand=True, padx=16, pady=(4, 4))
+
+        transcript_header = ctk.CTkFrame(self._transcript_section.content, fg_color="transparent")
+        transcript_header.pack(fill=tk.X, pady=(0, 4))
         self.copy_transcript_btn = ctk.CTkButton(
             transcript_header, text="📋 Copy Transcript", width=130, height=28,
             fg_color="#1f2937", hover_color=ACCENT, text_color=FG_BRIGHT,
@@ -285,22 +454,21 @@ class CallNotesApp:
             border_width=1, border_color=BORDER, state=tk.DISABLED,
             command=self._copy_transcript)
         self.copy_transcript_btn.pack(side=tk.RIGHT)
-        self.transcript_text = StyledText(card, height=8, font=("Consolas", 10))
-        self.transcript_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+        self.transcript_text = StyledText(self._transcript_section.content, height=8, font=("Consolas", 10))
+        self.transcript_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
-        # Notes
-        ctk.CTkLabel(card, text="📝  Generated Notes",
-                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
-                     text_color=FG_BRIGHT).pack(anchor=tk.W, padx=16, pady=(2, 4))
-        self.notes_text = StyledText(card, height=8)
-        self.notes_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+        # ── Collapsible: Notes ──
+        self._notes_section = CollapsibleSection(card, "Generated Notes", icon="📝")
+        self._notes_section.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 4))
+        self.notes_text = StyledText(self._notes_section.content, height=8)
+        self.notes_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
-        # Follow-Up Email
-        email_header = ctk.CTkFrame(card, fg_color="transparent")
-        email_header.pack(fill=tk.X, padx=16, pady=(2, 4))
-        ctk.CTkLabel(email_header, text="📧  Follow-Up Email",
-                     font=ctk.CTkFont("Segoe UI", 11, "bold"),
-                     text_color=FG_BRIGHT).pack(side=tk.LEFT)
+        # ── Collapsible: Follow-Up Email ──
+        self._email_section = CollapsibleSection(card, "Follow-Up Email", icon="📧")
+        self._email_section.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 14))
+
+        email_header = ctk.CTkFrame(self._email_section.content, fg_color="transparent")
+        email_header.pack(fill=tk.X, pady=(0, 4))
         self.outlook_draft_btn = ctk.CTkButton(
             email_header, text="📨 Outlook Draft", width=120, height=28,
             fg_color="#1f2937", hover_color=ACCENT, text_color=FG_BRIGHT,
@@ -308,15 +476,15 @@ class CallNotesApp:
             border_width=1, border_color=BORDER, state=tk.DISABLED,
             command=self._send_to_outlook_draft)
         self.outlook_draft_btn.pack(side=tk.RIGHT)
-        self.email_text = StyledText(card, height=6, font=("Segoe UI", 10))
-        self.email_text.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+        self.email_text = StyledText(self._email_section.content, height=6, font=("Segoe UI", 10))
+        self.email_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
 
     # ── Right: Call Intelligence Panel ──
     def _build_ai_panel(self, parent):
         card = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=14,
                              border_width=1, border_color=BORDER)
-        card.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+        card.pack(fill=tk.BOTH, expand=True)
 
         # Header with clear button
         top = ctk.CTkFrame(card, fg_color="transparent")
@@ -419,6 +587,107 @@ class CallNotesApp:
         self.debrief_next_var.set(debrief.get("next_step", ""))
         self.status_var.set("📝 Post-call debrief auto-filled — review and edit before queuing SIFT")
 
+    # ─────────────────────────── POST-CALL CHECKLIST ──────────────────────────
+
+    def _show_checklist(self):
+        """Reset and show the post-call progress checklist."""
+        for key in self._checklist_items:
+            self._checklist_items[key] = "pending"
+            icon_lbl, text_lbl = self._checklist_labels[key]
+            icon_lbl.configure(text="⬜")
+            text_lbl.configure(text_color=FG_DIM)
+        self._checklist_frame.pack(fill=tk.X, padx=16, pady=(0, 4),
+                                    before=self._transcript_section)
+
+    def _hide_checklist(self):
+        """Hide the checklist."""
+        self._checklist_frame.pack_forget()
+
+    def _update_checklist(self, key, status):
+        """Update a checklist item. status: 'running', 'done', 'failed', 'skipped'."""
+        if key not in self._checklist_labels:
+            return
+        self._checklist_items[key] = status
+        icon_lbl, text_lbl = self._checklist_labels[key]
+        icons = {"running": "🔄", "done": "✅", "failed": "❌", "skipped": "⏭️"}
+        colors = {"running": ORANGE, "done": ACCENT, "failed": RED, "skipped": FG_DIM}
+        icon_lbl.configure(text=icons.get(status, "⬜"))
+        text_lbl.configure(text_color=colors.get(status, FG_DIM))
+
+    # ─────────────────────────── RECORDING INDICATOR ───────────────────────────
+
+    def _start_recording_pulse(self):
+        """Start the pulsing recording indicator."""
+        self._recording_pulse_on = True
+        if self._recording_dot:
+            self._recording_dot.pack(side=tk.LEFT, padx=(4, 0))
+        self._pulse_recording()
+
+    def _pulse_recording(self):
+        """Toggle visibility of the recording dot for a pulse effect."""
+        if not self._recording_pulse_on:
+            return
+        try:
+            current = self._recording_dot.cget("text_color")
+            new_color = RED if current == BG_DARK or current == "#0a0a0a" else BG_DARK
+            self._recording_dot.configure(text_color=new_color)
+            self._recording_pulse_id = self.root.after(600, self._pulse_recording)
+        except Exception:
+            pass
+
+    def _stop_recording_pulse(self):
+        """Stop the pulsing recording indicator."""
+        self._recording_pulse_on = False
+        if self._recording_pulse_id:
+            try:
+                self.root.after_cancel(self._recording_pulse_id)
+            except Exception:
+                pass
+            self._recording_pulse_id = None
+        if self._recording_dot:
+            self._recording_dot.pack_forget()
+
+    # ─────────────────────────── WINDOW TITLE ───────────────────────────
+
+    def _update_window_title(self, customer=None, recording=False):
+        """Update the top-level window title with customer name and recording state."""
+        try:
+            toplevel = self.root.winfo_toplevel()
+            if customer and recording:
+                toplevel.title(f"🔴 Recording — {customer} — Call Notes")
+            elif customer:
+                toplevel.title(f"{customer} — Call Notes")
+            else:
+                toplevel.title("Call Notes — Live Transcriber")
+        except Exception:
+            pass
+
+    # ─────────────────────────── TOAST HELPER ───────────────────────────
+
+    def _toast(self, message, color=ACCENT):
+        """Show a toast notification on the app's root widget."""
+        try:
+            toplevel = self.root.winfo_toplevel()
+            show_toast(toplevel, message, color=color)
+        except Exception:
+            pass
+
+    # ─────────────────────────── SHARE HTML ───────────────────────────
+
+    def _export_share_html(self):
+        """Export notes as a self-contained HTML file for sharing."""
+        if not self._current_notes:
+            messagebox.showinfo("Nothing to export", "No notes to export.")
+            return
+        customer = self.customer_var.get().strip() or "Notes"
+        path = filedialog.asksaveasfilename(
+            defaultextension=".html", filetypes=[("HTML File", "*.html")],
+            initialfile=f"{customer}_call_summary.html")
+        if path:
+            export_share_html(customer, self._current_notes, path)
+            self.status_var.set(f"Shared: {path}")
+            self._toast(f"📤 Summary exported to {os.path.basename(path)}")
+
 
     # ─────────────────────────── HISTORY ───────────────────────────
 
@@ -466,6 +735,7 @@ class CallNotesApp:
         self.customer_var.set(item["customer_name"])
         self.export_docx_btn.configure(state=tk.NORMAL)
         self.export_pdf_btn.configure(state=tk.NORMAL)
+        self.share_html_btn.configure(state=tk.NORMAL if self._current_notes else tk.DISABLED)
         self.sift_btn.configure(state=tk.NORMAL if self._current_notes else tk.DISABLED)
         self.activity_btn.configure(state=tk.NORMAL if self._current_notes else tk.DISABLED)
         self.copy_transcript_btn.configure(state=tk.NORMAL if self._current_transcript else tk.DISABLED)
@@ -548,6 +818,7 @@ class CallNotesApp:
             mail.HTMLBody = html_body + mail.HTMLBody
             mail.Save()
             self.status_var.set("📨 Email saved to Outlook Drafts!")
+            self._toast("📨 Email saved to Outlook Drafts!")
         except ImportError:
             messagebox.showerror("Missing Library",
                                  "Install pywin32: python -m pip install pywin32")
@@ -562,6 +833,7 @@ class CallNotesApp:
         self.root.clipboard_clear()
         self.root.clipboard_append(transcript)
         self.status_var.set("📋 Transcript copied to clipboard!")
+        self._toast("📋 Transcript copied to clipboard!")
 
     def _export_docx(self):
         if not self._current_notes:
@@ -574,6 +846,7 @@ class CallNotesApp:
         if path:
             _md_to_docx(customer, self._current_notes, path)
             self.status_var.set(f"Exported: {path}")
+            self._toast(f"📄 DOCX exported: {os.path.basename(path)}")
 
     def _export_pdf(self):
         if not self._current_notes:
@@ -640,12 +913,12 @@ class CallNotesApp:
 
                 self.root.after(0, lambda: self.status_var.set(
                     f"✅ SIFT insight queued for {customer}"))
+                self.root.after(0, lambda: self._toast(f"📊 SIFT insight queued for {customer}"))
 
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror(
                     "SIFT Error", f"Failed to extract insight:\n{e}"))
                 self.root.after(0, lambda: self.status_var.set("SIFT error"))
-            finally:
                 self.root.after(0, lambda: self.sift_btn.configure(
                     state=tk.NORMAL, text="📊 SIFT"))
 
@@ -674,12 +947,12 @@ class CallNotesApp:
 
                 self.root.after(0, lambda: self.status_var.set(
                     f"✅ Activity queued for {customer}"))
+                self.root.after(0, lambda: self._toast(f"📝 Activity queued for {customer}"))
 
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror(
                     "Activity Error", f"Failed to extract activity:\n{e}"))
                 self.root.after(0, lambda: self.status_var.set("Activity error"))
-            finally:
                 self.root.after(0, lambda: self.activity_btn.configure(
                     state=tk.NORMAL, text="📝 Activity"))
 
@@ -778,6 +1051,7 @@ class CallNotesApp:
         self._pending_questions.clear()
         self.export_docx_btn.configure(state=tk.DISABLED)
         self.export_pdf_btn.configure(state=tk.DISABLED)
+        self.share_html_btn.configure(state=tk.DISABLED)
         self.outlook_draft_btn.configure(state=tk.DISABLED)
         self.copy_transcript_btn.configure(state=tk.DISABLED)
 
@@ -794,6 +1068,8 @@ class CallNotesApp:
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.status_var.set("🔴 Recording...")
+        self._start_recording_pulse()
+        self._update_window_title(customer=customer, recording=True)
 
     def _stop(self):
         if not self.transcriber:
@@ -806,8 +1082,11 @@ class CallNotesApp:
         self.start_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
 
+        self._stop_recording_pulse()
+
         if not transcript:
             self.status_var.set("No speech detected.")
+            self._update_window_title()
             messagebox.showinfo("Empty", "No transcript was captured.")
             return
 
@@ -825,6 +1104,13 @@ class CallNotesApp:
         customer = self._locked_customer
         self.root.after(0, self._prepare_notes_for_streaming)
         self.root.after(0, self._prepare_email_for_streaming)
+        self.root.after(0, self._show_checklist)
+
+        # Mark parallel steps as running
+        self.root.after(0, lambda: self._update_checklist("notes", "running"))
+        self.root.after(0, lambda: self._update_checklist("email", "running"))
+        self.root.after(0, lambda: self._update_checklist("debrief", "running"))
+        self.root.after(0, lambda: self._update_checklist("outlook_task", "running"))
 
         # Shared state for parallel results
         results = {"notes": None, "email": None, "filepath": None,
@@ -838,8 +1124,10 @@ class CallNotesApp:
                 results["notes"] = notes
                 self._current_notes = notes
                 results["filepath"] = save_notes(customer, notes)
+                self.root.after(0, lambda: self._update_checklist("notes", "done"))
             except Exception as e:
                 results["notes_error"] = e
+                self.root.after(0, lambda: self._update_checklist("notes", "failed"))
 
         def run_email():
             try:
@@ -848,25 +1136,41 @@ class CallNotesApp:
                 email = generate_followup_email(transcript, customer, on_chunk=on_email_chunk)
                 results["email"] = email
                 self._current_email = email
+                self.root.after(0, lambda: self._update_checklist("email", "done"))
             except Exception as e:
                 results["email_error"] = e
+                self.root.after(0, lambda: self._update_checklist("email", "failed"))
 
         def run_debrief():
             try:
                 debrief = extract_debrief(transcript, customer)
                 self.root.after(0, lambda d=debrief: self._populate_debrief(d))
+                self.root.after(0, lambda: self._update_checklist("debrief", "done"))
             except Exception as e:
                 print(f"[debrief] Error: {e}")
+                self.root.after(0, lambda: self._update_checklist("debrief", "failed"))
+
+        def run_outlook_task():
+            try:
+                if create_followup_task(customer):
+                    self.root.after(0, lambda: self._update_checklist("outlook_task", "done"))
+                else:
+                    self.root.after(0, lambda: self._update_checklist("outlook_task", "failed"))
+            except Exception as e:
+                print(f"[outlook tasks] Error: {e}")
+                self.root.after(0, lambda: self._update_checklist("outlook_task", "failed"))
 
         notes_thread = threading.Thread(target=run_notes, daemon=True)
         email_thread = threading.Thread(target=run_email, daemon=True)
         debrief_thread = threading.Thread(target=run_debrief, daemon=True)
+        outlook_thread = threading.Thread(target=run_outlook_task, daemon=True)
         notes_thread.start()
         email_thread.start()
         debrief_thread.start()
+        outlook_thread.start()
         notes_thread.join()
         email_thread.join()
-        # Don't wait for debrief — it'll populate the fields when ready
+        # Don't wait for debrief or outlook task — they'll update the checklist when ready
 
         if results["notes_error"]:
             self.root.after(0, lambda: messagebox.showerror(
@@ -876,47 +1180,50 @@ class CallNotesApp:
             self.root.after(0, lambda: self.status_var.set("Error generating notes."))
             return
 
+        # Save session
+        self.root.after(0, lambda: self._update_checklist("save", "running"))
         try:
             save_session(customer, transcript,
                          results["notes"] or "", results["filepath"] or "",
                          followup_email=results["email"] or "")
+            self.root.after(0, lambda: self._update_checklist("save", "done"))
         except Exception:
-            pass
+            self.root.after(0, lambda: self._update_checklist("save", "failed"))
 
         self.root.after(0, lambda: self.status_var.set(f"Notes saved: {results['filepath']}"))
         self.root.after(0, lambda: self.export_docx_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.export_pdf_btn.configure(state=tk.NORMAL))
+        self.root.after(0, lambda: self.share_html_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.sift_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.activity_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.copy_transcript_btn.configure(state=tk.NORMAL))
         self.root.after(0, lambda: self.outlook_draft_btn.configure(
             state=tk.NORMAL if results["email"] else tk.DISABLED))
         self.root.after(0, self._refresh_history)
+        self.root.after(0, lambda: self._toast(f"✅ Notes generated for {customer}"))
+        self.root.after(0, lambda: self._update_window_title(customer=customer))
 
         if results["email_error"]:
             self.root.after(0, lambda: self.status_var.set(
                 f"Notes saved but email failed: {results['email_error']}"))
 
-        # Extract competitor mentions in background (non-blocking)
+        # Extract competitor mentions (still depends on notes)
         if results["notes"]:
+            self.root.after(0, lambda: self._update_checklist("competitors", "running"))
             try:
                 mentions = extract_competitors(results["notes"], customer)
                 if mentions:
                     save_competitor_mentions(customer, mentions)
                     print(f"[competitive intel] Saved {len(mentions)} competitor mention(s)")
+                self.root.after(0, lambda: self._update_checklist("competitors", "done"))
             except Exception as e:
                 print(f"[competitive intel] Error: {e}")
-
-            # Create a single follow-up task in Outlook
-            try:
-                if create_followup_task(customer):
-                    self.root.after(0, lambda: self.status_var.set(
-                        f"Notes saved + follow-up task created"))
-            except Exception as e:
-                print(f"[outlook tasks] Error: {e}")
+                self.root.after(0, lambda: self._update_checklist("competitors", "failed"))
 
             # SA activity is queued on-demand via the "Queue Activity" button,
             # not automatically on stop. See _log_activity().
+        else:
+            self.root.after(0, lambda: self._update_checklist("competitors", "skipped"))
 
         # Unlock UI — generation complete
         self._generating = False
@@ -2810,6 +3117,23 @@ def main():
     root.geometry("1440x860")
     root.minsize(1100, 700)
     root.configure(fg_color=BG_DARK)
+
+    # Top bar with theme toggle
+    top_bar = ctk.CTkFrame(root, fg_color="transparent", height=36)
+    top_bar.pack(fill=tk.X, padx=16, pady=(8, 0))
+
+    def toggle_theme():
+        new_theme = "light" if get_theme() == "dark" else "dark"
+        set_theme(new_theme)
+        root.configure(fg_color=BG_DARK)
+        theme_btn.configure(text="🌙 Dark" if new_theme == "light" else "☀️ Light")
+
+    theme_btn = ctk.CTkButton(
+        top_bar, text="☀️ Light", width=80, height=28,
+        fg_color=BG_INPUT, hover_color=BG_CARD, text_color=ACCENT,
+        border_width=1, border_color=BORDER, corner_radius=6,
+        font=ctk.CTkFont("Segoe UI", 11), command=toggle_theme)
+    theme_btn.pack(side=tk.RIGHT)
 
     # Tab container
     tabview = ctk.CTkTabview(root, fg_color=BG_PANEL, segmented_button_fg_color=BG_CARD,
