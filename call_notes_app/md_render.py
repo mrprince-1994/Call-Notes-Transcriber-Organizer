@@ -36,6 +36,13 @@ def configure_tags(text_widget):
                               spacing1=3, spacing3=3)
     text_widget.tag_configure("link", foreground="#60a5fa", font=("Segoe UI", 10),
                               underline=True)
+    # Table tags
+    text_widget.tag_configure("table_header", foreground="#eef0f2",
+                              font=("Consolas", 10, "bold"), lmargin1=10, lmargin2=10)
+    text_widget.tag_configure("table_cell", foreground="#c8ccd0",
+                              font=("Consolas", 10), lmargin1=10, lmargin2=10)
+    text_widget.tag_configure("table_border", foreground="#4b5563",
+                              font=("Consolas", 10), lmargin1=10, lmargin2=10)
     # Change cursor to hand when hovering over links
     text_widget.tag_bind("link", "<Enter>",
                          lambda e: text_widget.config(cursor="hand2"))
@@ -55,6 +62,7 @@ class MarkdownStreamer:
     def __init__(self, text_widget):
         self._widget = text_widget
         self._buffer = ""
+        self._table_rows = []  # accumulate table rows for batch rendering
 
     def feed(self, chunk: str):
         """Feed a streaming chunk. Renders complete lines immediately."""
@@ -84,6 +92,67 @@ class MarkdownStreamer:
             if self._buffer:
                 self._render_line(self._buffer)
                 self._buffer = ""
+        # Flush any pending table rows
+        if self._table_rows:
+            self._flush_table()
+
+    def _flush_table(self):
+        """Render accumulated table rows as a formatted table."""
+        if not self._table_rows:
+            return
+        w = self._widget
+
+        # Filter out separator rows (|---|---|)
+        data_rows = []
+        for row in self._table_rows:
+            cells = [c.strip() for c in row.strip("|").split("|")]
+            # Skip separator rows like |---|---|
+            if all(re.match(r"^:?-+:?$", c) for c in cells if c):
+                continue
+            data_rows.append(cells)
+
+        if not data_rows:
+            self._table_rows = []
+            return
+
+        # Calculate column widths
+        num_cols = max(len(r) for r in data_rows)
+        col_widths = [0] * num_cols
+        for row in data_rows:
+            for i, cell in enumerate(row):
+                if i < num_cols:
+                    col_widths[i] = max(col_widths[i], len(_strip_md_inline(cell)))
+
+        # Pad each column to at least a minimum width
+        col_widths = [max(w, 6) for w in col_widths]
+
+        # Render each row
+        for row_idx, row in enumerate(data_rows):
+            # Pad row to num_cols
+            while len(row) < num_cols:
+                row.append("")
+            is_header = (row_idx == 0)
+            for col_idx, cell in enumerate(row):
+                cell_text = cell.strip()
+                padded = cell_text.ljust(col_widths[col_idx])
+                if col_idx == 0:
+                    w.insert(tk.END, "  ", "table_cell")
+                tag = "table_header" if is_header else "table_cell"
+                _insert_inline(w, padded, tag)
+                if col_idx < num_cols - 1:
+                    w.insert(tk.END, " │ ", "table_border")
+            w.insert(tk.END, "\n")
+            # Draw separator after header
+            if is_header:
+                sep = "  "
+                for ci, cw in enumerate(col_widths):
+                    sep += "─" * cw
+                    if ci < num_cols - 1:
+                        sep += "─┼─"
+                w.insert(tk.END, sep + "\n", "table_border")
+
+        w.insert(tk.END, "\n")
+        self._table_rows = []
 
     def _render_line(self, line: str):
         """Render a single line with markdown formatting."""
@@ -92,6 +161,15 @@ class MarkdownStreamer:
 
         # DEBUG: uncomment to see what lines are being rendered
         # print(f"[md_render] LINE: {repr(stripped[:120])}")
+
+        # Table row detection: lines that start with |
+        if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 3:
+            self._table_rows.append(stripped)
+            return
+        else:
+            # If we were accumulating table rows, flush them now
+            if self._table_rows:
+                self._flush_table()
 
         # Horizontal rule
         if stripped and all(c == "-" for c in stripped) and len(stripped) >= 3:
