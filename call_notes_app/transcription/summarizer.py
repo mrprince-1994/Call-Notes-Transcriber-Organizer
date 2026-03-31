@@ -64,13 +64,22 @@ Be exhaustive. It is better to include too much detail than too little. Preserve
 names, numbers, and technical details exactly as stated."""
 
 
-def generate_notes(transcript: str, customer_name: str, on_chunk=None) -> str:
+def generate_notes(transcript: str, customer_name: str, on_chunk=None, manual_notes: str = "") -> str:
     """Send transcript to Claude on Bedrock and stream back comprehensive notes."""
     client = boto3.client(
         "bedrock-runtime",
         region_name=AWS_REGION,
         config=Config(read_timeout=300),
     )
+
+    user_content = f"Customer/Meeting: {customer_name}\n\n"
+    if manual_notes:
+        user_content += (
+            "Operator Notes (corrections, attendee info, and focus areas from the note-taker — "
+            "treat these as authoritative context that supplements the transcript):\n"
+            f"{manual_notes}\n\n"
+        )
+    user_content += f"Raw Transcript:\n{transcript}"
 
     payload = {
         "anthropic_version": "bedrock-2023-05-31",
@@ -79,7 +88,7 @@ def generate_notes(transcript: str, customer_name: str, on_chunk=None) -> str:
         "messages": [
             {
                 "role": "user",
-                "content": f"Customer/Meeting: {customer_name}\n\nRaw Transcript:\n{transcript}",
+                "content": user_content,
             }
         ],
     }
@@ -130,7 +139,7 @@ Subject: <your suggested subject line>
 Then a blank line, then the email body."""
 
 
-def generate_followup_email(transcript: str, customer_name: str, on_chunk=None) -> str:
+def generate_followup_email(transcript: str, customer_name: str, on_chunk=None, manual_notes: str = "") -> str:
     """Generate a follow-up email from a call transcript using Claude on Bedrock."""
     import os
 
@@ -151,6 +160,14 @@ def generate_followup_email(transcript: str, customer_name: str, on_chunk=None) 
         config=Config(read_timeout=300),
     )
 
+    user_content = f"Customer: {customer_name}\n\n"
+    if manual_notes:
+        user_content += (
+            "Operator Notes (corrections, attendee info, and focus areas from the note-taker):\n"
+            f"{manual_notes}\n\n"
+        )
+    user_content += f"Call Transcript:\n{transcript}"
+
     payload = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 4096,
@@ -158,7 +175,7 @@ def generate_followup_email(transcript: str, customer_name: str, on_chunk=None) 
         "messages": [
             {
                 "role": "user",
-                "content": f"Customer: {customer_name}\n\nCall Transcript:\n{transcript}",
+                "content": user_content,
             }
         ],
     }

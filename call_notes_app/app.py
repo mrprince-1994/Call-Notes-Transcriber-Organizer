@@ -457,6 +457,20 @@ class CallNotesApp:
         self.transcript_text = StyledText(self._transcript_section.content, height=8, font=("Consolas", 10))
         self.transcript_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
+        # ── Collapsible: Manual Notes ──
+        self._manual_notes_section = CollapsibleSection(card, "Manual Notes", icon="✏️")
+        self._manual_notes_section.pack(fill=tk.BOTH, padx=16, pady=(0, 4))
+
+        manual_hint = ctk.CTkLabel(
+            self._manual_notes_section.content,
+            text="Attendee corrections, focus areas, or context for the AI — sent alongside the transcript.",
+            text_color=FG_DIM, font=ctk.CTkFont("Segoe UI", 10), anchor=tk.W)
+        manual_hint.pack(fill=tk.X, pady=(0, 4))
+
+        self.manual_notes_text = StyledText(
+            self._manual_notes_section.content, height=4, font=("Segoe UI", 10))
+        self.manual_notes_text.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+
         # ── Collapsible: Notes ──
         self._notes_section = CollapsibleSection(card, "Generated Notes", icon="📝")
         self._notes_section.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 4))
@@ -893,6 +907,12 @@ class CallNotesApp:
         self.sift_btn.configure(state=tk.DISABLED, text="📊 Extracting...")
         self.status_var.set("Extracting SIFT insight...")
 
+        def _flash_btn(text, color):
+            """Flash the button with a result state, then reset after 3s."""
+            self.sift_btn.configure(text=text, fg_color=color, state=tk.DISABLED)
+            self.root.after(3000, lambda: self.sift_btn.configure(
+                state=tk.NORMAL, text="📊 SIFT", fg_color="#1f2937"))
+
         def _run():
             try:
                 # Gather debrief context if provided
@@ -905,22 +925,24 @@ class CallNotesApp:
                 if path == "DUPLICATE":
                     self.root.after(0, lambda: self.status_var.set(
                         f"⚠️ SIFT insight already queued for {customer}"))
+                    self.root.after(0, lambda: _flash_btn("⚠️ Duplicate", "#92400e"))
                     return
                 if not path:
                     self.root.after(0, lambda: self.status_var.set(
                         "SIFT extraction failed — check console"))
+                    self.root.after(0, lambda: _flash_btn("❌ Failed", "#7f1d1d"))
                     return
 
                 self.root.after(0, lambda: self.status_var.set(
                     f"✅ SIFT insight queued for {customer}"))
                 self.root.after(0, lambda: self._toast(f"📊 SIFT insight queued for {customer}"))
+                self.root.after(0, lambda: _flash_btn("✅ Queued", "#065f46"))
 
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror(
                     "SIFT Error", f"Failed to extract insight:\n{e}"))
                 self.root.after(0, lambda: self.status_var.set("SIFT error"))
-                self.root.after(0, lambda: self.sift_btn.configure(
-                    state=tk.NORMAL, text="📊 SIFT"))
+                self.root.after(0, lambda: _flash_btn("❌ Error", "#7f1d1d"))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -933,28 +955,36 @@ class CallNotesApp:
         self.activity_btn.configure(state=tk.DISABLED, text="📝 Extracting...")
         self.status_var.set("Extracting activity details...")
 
+        def _flash_btn(text, color):
+            """Flash the button with a result state, then reset after 3s."""
+            self.activity_btn.configure(text=text, fg_color=color, state=tk.DISABLED)
+            self.root.after(3000, lambda: self.activity_btn.configure(
+                state=tk.NORMAL, text="📝 Activity", fg_color="#1f2937"))
+
         def _run():
             try:
                 path = queue_activity(customer, self._current_notes)
                 if path == "DUPLICATE":
                     self.root.after(0, lambda: self.status_var.set(
                         f"⚠️ Activity already queued for {customer}"))
+                    self.root.after(0, lambda: _flash_btn("⚠️ Duplicate", "#92400e"))
                     return
                 if not path:
                     self.root.after(0, lambda: self.status_var.set(
                         "Activity extraction failed — check console"))
+                    self.root.after(0, lambda: _flash_btn("❌ Failed", "#7f1d1d"))
                     return
 
                 self.root.after(0, lambda: self.status_var.set(
                     f"✅ Activity queued for {customer}"))
                 self.root.after(0, lambda: self._toast(f"📝 Activity queued for {customer}"))
+                self.root.after(0, lambda: _flash_btn("✅ Queued", "#065f46"))
 
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror(
                     "Activity Error", f"Failed to extract activity:\n{e}"))
                 self.root.after(0, lambda: self.status_var.set("Activity error"))
-                self.root.after(0, lambda: self.activity_btn.configure(
-                    state=tk.NORMAL, text="📝 Activity"))
+                self.root.after(0, lambda: _flash_btn("❌ Error", "#7f1d1d"))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1097,10 +1127,11 @@ class CallNotesApp:
         # Customer field stays editable so you can type a new name for the next call.
 
         self.status_var.set("Generating notes & follow-up email...")
-        threading.Thread(target=self._generate_and_save, args=(transcript,),
+        manual_notes = self.manual_notes_text.get("1.0", tk.END).strip()
+        threading.Thread(target=self._generate_and_save, args=(transcript, manual_notes),
                          daemon=True).start()
 
-    def _generate_and_save(self, transcript):
+    def _generate_and_save(self, transcript, manual_notes=""):
         customer = self._locked_customer
         self.root.after(0, self._prepare_notes_for_streaming)
         self.root.after(0, self._prepare_email_for_streaming)
@@ -1120,7 +1151,7 @@ class CallNotesApp:
             try:
                 def on_chunk(text):
                     self.root.after(0, self._append_notes_chunk, text)
-                notes = generate_notes(transcript, customer, on_chunk=on_chunk)
+                notes = generate_notes(transcript, customer, on_chunk=on_chunk, manual_notes=manual_notes)
                 results["notes"] = notes
                 self._current_notes = notes
                 results["filepath"] = save_notes(customer, notes)
@@ -1133,7 +1164,7 @@ class CallNotesApp:
             try:
                 def on_email_chunk(text):
                     self.root.after(0, self._append_email_chunk, text)
-                email = generate_followup_email(transcript, customer, on_chunk=on_email_chunk)
+                email = generate_followup_email(transcript, customer, on_chunk=on_email_chunk, manual_notes=manual_notes)
                 results["email"] = email
                 self._current_email = email
                 self.root.after(0, lambda: self._update_checklist("email", "done"))
@@ -1784,7 +1815,10 @@ class NotesRetrieverTab:
                 self.chat_text.insert(tk.END, f"{content}\n\n", "user_msg")
             elif role == "assistant":
                 self.chat_text.insert(tk.END, "Assistant\n", "assistant_label")
-                self.chat_text.insert(tk.END, f"{content}\n\n", "body")
+                streamer = MarkdownStreamer(self.chat_text)
+                streamer.feed(content + "\n")
+                streamer.flush()
+                self.chat_text.insert(tk.END, "\n", "body")
 
         self.chat_text.see(tk.END)
         self.chat_text.config(state=tk.DISABLED)
@@ -2584,7 +2618,10 @@ class CustomerResearchTab:
                 self.chat_text.insert(tk.END, f"{content}\n\n", "user_msg")
             elif role == "assistant":
                 self.chat_text.insert(tk.END, "Assistant\n", "assistant_label")
-                self.chat_text.insert(tk.END, f"{content}\n\n", "body")
+                streamer = MarkdownStreamer(self.chat_text)
+                streamer.feed(content + "\n")
+                streamer.flush()
+                self.chat_text.insert(tk.END, "\n", "body")
         self.chat_text.see(tk.END)
         self.chat_text.config(state=tk.DISABLED)
         turns = len(history) // 2
