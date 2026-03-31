@@ -528,7 +528,20 @@ def _local_retrieval(question: str, file_index: list[dict], conversation_history
                 "- Clearly label each engagement with its date so the reader knows the timeline.\n\n"
                 "When reading notes: cite customer, source, filename, and date. Be thorough — read all "
                 "relevant files, starting with the most recent. When asked for customer context, "
-                "read ALL their notes but present the most recent status first."
+                "read ALL their notes but present the most recent status first.\n\n"
+                "TABLE FORMATTING RULES:\n"
+                "- When presenting tabular data, ALWAYS use proper markdown tables.\n"
+                "- NEVER merge multiple data fields into a single column. Each distinct piece of "
+                "information MUST be its own column.\n"
+                "- Choose column headers that match the data — common patterns:\n"
+                "  Action items: | # | Action | Owner | Status | Date |\n"
+                "  Contacts: | Name | Title | Role | Notes |\n"
+                "  Comparisons: | Feature | Option A | Option B |\n"
+                "  Status: | Item | Status | Owner | Date |\n"
+                "- These are examples, not rigid templates. Pick headers that fit the data, but "
+                "the key rule is: one concept per column, never combine fields.\n"
+                "- Keep cell content concise — short phrases only, max ~60 chars per cell.\n"
+                "- Dates, owners, and statuses MUST always be separate columns."
             ),
             "messages": conversation_history,
             "tools": [READ_TOOL, WEB_SEARCH_TOOL, AWS_DOCS_TOOL, AWS_PRICING_TOOL],

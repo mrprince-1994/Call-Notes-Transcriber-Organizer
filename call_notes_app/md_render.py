@@ -36,13 +36,6 @@ def configure_tags(text_widget):
                               spacing1=3, spacing3=3)
     text_widget.tag_configure("link", foreground="#60a5fa", font=("Segoe UI", 10),
                               underline=True)
-    # Table tags
-    text_widget.tag_configure("table_header", foreground="#eef0f2",
-                              font=("Consolas", 10, "bold"), lmargin1=10, lmargin2=10)
-    text_widget.tag_configure("table_cell", foreground="#c8ccd0",
-                              font=("Consolas", 10), lmargin1=10, lmargin2=10)
-    text_widget.tag_configure("table_border", foreground="#4b5563",
-                              font=("Consolas", 10), lmargin1=10, lmargin2=10)
     # Change cursor to hand when hovering over links
     text_widget.tag_bind("link", "<Enter>",
                          lambda e: text_widget.config(cursor="hand2"))
@@ -96,8 +89,11 @@ class MarkdownStreamer:
         if self._table_rows:
             self._flush_table()
 
+    # Counter for unique table tag names
+    _table_counter = 0
+
     def _flush_table(self):
-        """Render accumulated table rows as a formatted table."""
+        """Render table as a static PhotoImage — zero scroll overhead."""
         if not self._table_rows:
             return
         w = self._widget
@@ -106,7 +102,6 @@ class MarkdownStreamer:
         data_rows = []
         for row in self._table_rows:
             cells = [c.strip() for c in row.strip("|").split("|")]
-            # Skip separator rows like |---|---|
             if all(re.match(r"^:?-+:?$", c) for c in cells if c):
                 continue
             data_rows.append(cells)
@@ -115,44 +110,103 @@ class MarkdownStreamer:
             self._table_rows = []
             return
 
-        # Calculate column widths
         num_cols = max(len(r) for r in data_rows)
-        col_widths = [0] * num_cols
         for row in data_rows:
-            for i, cell in enumerate(row):
-                if i < num_cols:
-                    col_widths[i] = max(col_widths[i], len(_strip_md_inline(cell)))
-
-        # Pad each column to at least a minimum width
-        col_widths = [max(w, 6) for w in col_widths]
-
-        # Render each row
-        for row_idx, row in enumerate(data_rows):
-            # Pad row to num_cols
             while len(row) < num_cols:
                 row.append("")
-            is_header = (row_idx == 0)
+
+        from PIL import Image, ImageDraw, ImageFont, ImageTk
+
+        # Style
+        HDR_BG = (16, 163, 127)
+        HDR_FG = (238, 240, 242)
+        EVEN_BG = (17, 24, 39)
+        ODD_BG = (13, 13, 20)
+        CELL_FG = (200, 204, 208)
+        GRID_CLR = (255, 255, 255)
+        PAD_X, PAD_Y = 10, 7
+
+        # Load fonts — fall back to default if Segoe UI not found
+        try:
+            f_hdr = ImageFont.truetype("segoeuib.ttf", 13)
+            f_cell = ImageFont.truetype("segoeui.ttf", 13)
+        except OSError:
+            f_hdr = ImageFont.load_default()
+            f_cell = ImageFont.load_default()
+
+        # Measure columns and rows
+        tmp = Image.new("RGB", (1, 1))
+        draw_tmp = ImageDraw.Draw(tmp)
+
+        col_widths = [0] * num_cols
+        row_heights = []
+
+        for row_idx, row in enumerate(data_rows):
+            font = f_hdr if row_idx == 0 else f_cell
+            max_h = 0
             for col_idx, cell in enumerate(row):
-                cell_text = cell.strip()
-                padded = cell_text.ljust(col_widths[col_idx])
-                if col_idx == 0:
-                    w.insert(tk.END, "  ", "table_cell")
-                tag = "table_header" if is_header else "table_cell"
-                _insert_inline(w, padded, tag)
-                if col_idx < num_cols - 1:
-                    w.insert(tk.END, " │ ", "table_border")
-            w.insert(tk.END, "\n")
-            # Draw separator after header
-            if is_header:
-                sep = "  "
-                for ci, cw in enumerate(col_widths):
-                    sep += "─" * cw
-                    if ci < num_cols - 1:
-                        sep += "─┼─"
-                w.insert(tk.END, sep + "\n", "table_border")
+                text = _strip_md_inline(cell.strip())
+                bbox = draw_tmp.textbbox((0, 0), text, font=font)
+                tw = bbox[2] - bbox[0] + PAD_X * 2
+                th = bbox[3] - bbox[1] + PAD_Y * 2
+                col_widths[col_idx] = max(col_widths[col_idx], tw)
+                max_h = max(max_h, th)
+            row_heights.append(max_h)
+
+        col_widths = [max(cw, 50) for cw in col_widths]
+
+        total_w = sum(col_widths) + num_cols + 1
+        total_h = sum(row_heights) + len(data_rows) + 1
+
+        # Draw the table image
+        img = Image.new("RGB", (total_w, total_h), (10, 10, 10))
+        draw = ImageDraw.Draw(img)
+
+        # Cell backgrounds and text
+        y = 1
+        for row_idx, row in enumerate(data_rows):
+            is_header = (row_idx == 0)
+            bg = HDR_BG if is_header else (EVEN_BG if row_idx % 2 == 1 else ODD_BG)
+            fg = HDR_FG if is_header else CELL_FG
+            font = f_hdr if is_header else f_cell
+            rh = row_heights[row_idx]
+
+            x = 1
+            for col_idx, cell in enumerate(row):
+                cw = col_widths[col_idx]
+                draw.rectangle([x, y, x + cw - 1, y + rh - 1], fill=bg)
+                text = _strip_md_inline(cell.strip())
+                draw.text((x + PAD_X, y + PAD_Y), text, fill=fg, font=font)
+                x += cw + 1
+            y += rh + 1
+
+        # Grid lines
+        y = 0
+        for row_idx in range(len(data_rows) + 1):
+            draw.line([(0, y), (total_w, y)], fill=GRID_CLR, width=1)
+            if row_idx < len(data_rows):
+                y += row_heights[row_idx] + 1
+
+        x = 0
+        for col_idx in range(num_cols + 1):
+            draw.line([(x, 0), (x, total_h)], fill=GRID_CLR, width=1)
+            if col_idx < num_cols:
+                x += col_widths[col_idx] + 1
+
+        # Convert to PhotoImage and embed as an image in the Text widget
+        photo = ImageTk.PhotoImage(img)
+
+        # Keep a reference so it doesn't get garbage collected
+        if not hasattr(w, "_table_images"):
+            w._table_images = []
+        w._table_images.append(photo)
 
         w.insert(tk.END, "\n")
+        w.image_create(tk.END, image=photo, padx=10, pady=4)
+        w.insert(tk.END, "\n\n")
+
         self._table_rows = []
+
 
     def _render_line(self, line: str):
         """Render a single line with markdown formatting."""
@@ -161,10 +215,19 @@ class MarkdownStreamer:
 
         # DEBUG: uncomment to see what lines are being rendered
         # print(f"[md_render] LINE: {repr(stripped[:120])}")
+        # with open("md_render_debug.log", "a") as dbg:
+        #     dbg.write(f"LINE: {repr(stripped[:200])}\n")
 
         # Table row detection: lines that start with |
-        if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 3:
+        if stripped.startswith("|") and stripped.count("|") >= 3:
             self._table_rows.append(stripped)
+            return
+        # Also catch separator rows like |---|---| or |:---|:---|
+        elif re.match(r"^\|[\s:]*-+", stripped):
+            self._table_rows.append(stripped)
+            return
+        elif self._table_rows and not stripped:
+            # Tolerate a single blank line inside a table (streaming artifact)
             return
         else:
             # If we were accumulating table rows, flush them now
